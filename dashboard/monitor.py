@@ -442,49 +442,59 @@ if data_loaded:
                     row_heights=row_heights
                 )
 
+                # TradingView Classic Colors
+                TV_GREEN = "#089981"
+                TV_RED = "#F23645"
+                TV_BG = "#131722"
+                TV_GRID = "#2a2e39"
+
+                # Convert timestamps to strings to skip non-trading gaps on X axis
+                df["t_str"] = df["t"].dt.strftime("%Y-%m-%d %H:%M")
+
                 # 1. Main Price Plot
                 if chart_style == "Candlestick":
                     fig.add_trace(go.Candlestick(
-                        x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
+                        x=df["t_str"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
                         name=f"{selected_asset}",
-                        increasing_line_color="#3fb950", decreasing_line_color="#f85149"
+                        increasing_line_color=TV_GREEN, decreasing_line_color=TV_RED,
+                        increasing_fillcolor=TV_GREEN, decreasing_fillcolor=TV_RED,
                     ), row=1, col=1)
                 elif chart_style == "Line Chart":
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["c"],
+                        x=df["t_str"], y=df["c"],
                         mode="lines",
                         name=f"{selected_asset}",
-                        line=dict(color="#58a6ff", width=2),
+                        line=dict(color="#2962FF", width=2),
                         fill="tozeroy",
-                        fillcolor="rgba(88, 166, 255, 0.05)"
+                        fillcolor="rgba(41, 98, 255, 0.1)"
                     ), row=1, col=1)
                 else:
                     fig.add_trace(go.Ohlc(
-                        x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
+                        x=df["t_str"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
                         name=f"{selected_asset}",
-                        increasing_line_color="#3fb950", decreasing_line_color="#f85149"
+                        increasing_line_color=TV_GREEN, decreasing_line_color=TV_RED
                     ), row=1, col=1)
 
                 # 2. Overlays
                 if "20 EMA" in indicator_selection:
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["ema20"], name="20 EMA",
-                        line=dict(color="#58a6ff", width=1.5)
+                        x=df["t_str"], y=df["ema20"], name="20 EMA",
+                        line=dict(color="#2962FF", width=1.5)
                     ), row=1, col=1)
                 if "50 EMA" in indicator_selection:
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["ema50"], name="50 EMA",
-                        line=dict(color="#d29922", width=1.5)
+                        x=df["t_str"], y=df["ema50"], name="50 EMA",
+                        line=dict(color="#FF9800", width=1.5)
                     ), row=1, col=1)
                 if "Bollinger Bands" in indicator_selection:
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["bb_upper"], name="BB Upper",
-                        line=dict(color="#bc8cff", width=1, dash="dot")
+                        x=df["t_str"], y=df["bb_upper"], name="BB Upper",
+                        line=dict(color="#9C27B0", width=1, dash="dot")
                     ), row=1, col=1)
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["bb_lower"], name="BB Lower",
-                        line=dict(color="#bc8cff", width=1, dash="dot"),
-                        fill="tonexty", fillcolor="rgba(188, 140, 255, 0.04)"
+                        x=df["t_str"], y=df["bb_lower"], name="BB Lower",
+                        line=dict(color="#9C27B0", width=1, dash="dot"),
+                        fill="tonexty", fillcolor="rgba(156, 39, 176, 0.05)"
                     ), row=1, col=1)
 
                 # 3. Active Option Strike Level Lines
@@ -495,7 +505,7 @@ if data_loaded:
                             strike_val = float(sym[-8:]) / 1000.0
                             opt_type = "Put" if "P" in sym else "Call"
                             fig.add_hline(
-                                y=strike_val, line_dash="dash", line_color="#39d353",
+                                y=strike_val, line_dash="dash", line_color="#FF9800",
                                 annotation_text=f"Active {opt_type}: ${strike_val:.0f}",
                                 row=1, col=1
                             )
@@ -505,35 +515,44 @@ if data_loaded:
                 current_row = 2
                 # 4. Volume Subplot
                 if has_volume:
-                    v_colors = ["#3fb950" if c >= o else "#f85149" for c, o in zip(df["c"], df["o"])]
+                    v_colors = [TV_GREEN if c >= o else TV_RED for c, o in zip(df["c"], df["o"])]
                     fig.add_trace(go.Bar(
-                        x=df["t"], y=df["v"], name="Volume",
-                        marker_color=v_colors, opacity=0.75
+                        x=df["t_str"], y=df["v"], name="Volume",
+                        marker_color=v_colors, opacity=0.8
                     ), row=current_row, col=1)
-                    fig.update_yaxes(gridcolor="#21262d", row=current_row, col=1)
+                    fig.update_yaxes(gridcolor=TV_GRID, side="right", row=current_row, col=1)
                     current_row += 1
 
                 # 5. RSI Subplot
                 if has_rsi:
                     fig.add_trace(go.Scatter(
-                        x=df["t"], y=df["rsi"], name="RSI",
-                        line=dict(color="#f0883e", width=1.5)
+                        x=df["t_str"], y=df["rsi"], name="RSI",
+                        line=dict(color="#7E57C2", width=1.5)
                     ), row=current_row, col=1)
-                    fig.add_hline(y=70, line_dash="dot", line_color="#f85149", row=current_row, col=1)
-                    fig.add_hline(y=30, line_dash="dot", line_color="#3fb950", row=current_row, col=1)
-                    fig.update_yaxes(range=[0, 100], gridcolor="#21262d", row=current_row, col=1)
+                    fig.add_hline(y=70, line_dash="dot", line_color=TV_RED, row=current_row, col=1)
+                    fig.add_hline(y=30, line_dash="dot", line_color=TV_GREEN, row=current_row, col=1)
+                    fig.update_yaxes(range=[0, 100], gridcolor=TV_GRID, side="right", row=current_row, col=1)
 
                 # Unified Layout
                 fig.update_layout(
-                    height=580,
-                    margin=dict(t=20, b=20, l=20, r=20),
-                    paper_bgcolor="#161b22",
-                    plot_bgcolor="#161b22",
-                    xaxis=dict(gridcolor="#21262d", rangeslider=dict(visible=False)),
-                    yaxis=dict(gridcolor="#21262d"),
-                    legend=dict(orientation="h", y=1.03, x=0.5, xanchor="center", font=dict(color="#8b949e")),
+                    height=600,
+                    margin=dict(t=10, b=20, l=10, r=10),
+                    paper_bgcolor=TV_BG,
+                    plot_bgcolor=TV_BG,
+                    xaxis=dict(
+                        type="category",
+                        gridcolor=TV_GRID, 
+                        rangeslider=dict(visible=False),
+                        nticks=10
+                    ),
+                    yaxis=dict(gridcolor=TV_GRID, side="right"),
+                    legend=dict(orientation="h", y=1.02, x=0.01, xanchor="left", font=dict(color="#d1d4dc")),
                     hovermode="x unified",
+                    font=dict(color="#d1d4dc")
                 )
+                
+                # Update all x-axes to not show grid lines if they get too dense, and align with category
+                fig.update_xaxes(type="category", gridcolor=TV_GRID, nticks=10)
                 st.plotly_chart(fig, use_container_width=True)
 
             else:

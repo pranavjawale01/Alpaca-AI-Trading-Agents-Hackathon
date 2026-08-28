@@ -106,7 +106,7 @@ class ThetaCollectorAgent:
                 if signal:
                     actions.append(signal)
             except RiskViolation as e:
-                console.print(f"[yellow]⚠ Risk block [{symbol}]: {e}[/yellow]")
+                console.print(f"[yellow][RISK BLOCK] [{symbol}]: {e}[/yellow]")
             except Exception as e:
                 log.error(f"Entry scan error [{symbol}]: {e}")
 
@@ -205,7 +205,7 @@ class ThetaCollectorAgent:
         }
 
         console.print(
-            f"[green]✅ ThetaCollector SOLD PUT: {symbol} "
+            f"[green][FILLED] ThetaCollector SOLD PUT: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} "
             f"x{n_contracts} | premium=${premium*100*n_contracts:,.0f}[/green]"
         )
@@ -224,7 +224,7 @@ class ThetaCollectorAgent:
             contract_symbol = meta.get("contract")
             if contract_symbol not in positions:
                 # Position already closed (expired worthless = max profit!)
-                console.print(f"[green]💰 {symbol} CSP expired worthless — max profit![/green]")
+                console.print(f"[green][EXPIRED] {symbol} CSP expired worthless (max profit)[/green]")
                 del self.active_positions[symbol]
                 actions.append({"agent": "ThetaCollector", "action": "expired_worthless", "symbol": symbol})
                 continue
@@ -246,6 +246,6 @@ class ThetaCollectorAgent:
         try:
             self.client.place_option_market_order(contract_symbol, qty, "buy")
             del self.active_positions[symbol]
-            console.print(f"[blue]🔒 ThetaCollector closed {symbol} [{reason}][/blue]")
+            console.print(f"[blue][CLOSED] ThetaCollector closed {symbol} [{reason}][/blue]")
         except Exception as e:
             log.error(f"Failed to close {symbol}: {e}")

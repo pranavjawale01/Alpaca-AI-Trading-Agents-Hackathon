@@ -89,7 +89,7 @@ class MomoBreakoutAgent:
                 # Both conditions must be true
                 if ema_signal["crossover"] and vol_surge["is_surging"]:
                     console.print(
-                        f"[yellow]🔥 Breakout signal: {symbol} | "
+                        f"[yellow][SIGNAL] Breakout detected: {symbol} | "
                         f"EMA={ema_signal['signal']} | surge={vol_surge['surge_ratio']:.1f}x[/yellow]"
                     )
                     action = self._buy_call(symbol, equity)
@@ -97,7 +97,7 @@ class MomoBreakoutAgent:
                         actions.append(action)
 
             except RiskViolation as e:
-                console.print(f"[yellow]⚠ Risk block [{symbol} momo]: {e}[/yellow]")
+                console.print(f"[yellow][RISK BLOCK] [{symbol} momo]: {e}[/yellow]")
             except Exception as e:
                 log.error(f"Momo scan error [{symbol}]: {e}")
 
@@ -152,7 +152,7 @@ class MomoBreakoutAgent:
         self.active_positions[symbol] = action
 
         console.print(
-            f"[green]✅ MomoBreakout BOUGHT CALL: {symbol} "
+            f"[green][FILLED] MomoBreakout BOUGHT CALL: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} x{n_contracts}[/green]"
         )
         return action
@@ -175,14 +175,14 @@ class MomoBreakoutAgent:
                 # Hit profit target
                 self.client.place_option_market_order(contract_sym, meta["qty"], "sell")
                 del self.active_positions[symbol]
-                console.print(f"[green]💰 MomoBreakout profit target: {symbol} (+{plpc*100:.0f}%)[/green]")
+                console.print(f"[green][PROFIT TARGET] MomoBreakout closed {symbol} (+{plpc*100:.0f}%)[/green]")
                 actions.append({"agent": "MomoBreakout", "action": "closed_profit", "symbol": symbol})
 
             elif plpc <= -STOP_LOSS_PCT:
                 # Hit stop loss
                 self.client.place_option_market_order(contract_sym, meta["qty"], "sell")
                 del self.active_positions[symbol]
-                console.print(f"[red]🛑 MomoBreakout stop loss: {symbol} ({plpc*100:.0f}%)[/red]")
+                console.print(f"[red][STOP LOSS] MomoBreakout closed {symbol} ({plpc*100:.0f}%)[/red]")
                 actions.append({"agent": "MomoBreakout", "action": "stopped_out", "symbol": symbol})
 
         return actions

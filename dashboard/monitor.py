@@ -1,14 +1,9 @@
 """
-dashboard/monitor.py — Streamlit P&L Dashboard.
+dashboard/monitor.py — Real-Time Trading & Portfolio Monitor.
 
-Real-time monitoring dashboard for the Cache Me trading system.
-
-Shows:
-  - Current equity vs $100,000 baseline
-  - Daily / cumulative P&L chart
-  - Open positions table with Greeks
-  - Risk gauge (delta, VIX, daily loss remaining)
-  - Session activity log
+Professional financial dashboard for the Cache Me If You Can trading system.
+Styled with modern typography, dark-mode financial cards, live P&L gauge,
+real-time open positions, and risk management limits.
 
 Run: streamlit run dashboard/monitor.py
 """
@@ -21,7 +16,7 @@ from pathlib import Path
 import time
 from datetime import datetime, timezone
 
-# Add project root to sys.path so 'core' and 'agents' packages can be imported
+# Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -36,50 +31,141 @@ if sys.stdout.encoding != "utf-8":
     except Exception:
         pass
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# Lazy import
 def _get_client():
     from core.alpaca_client import AlpacaClient
     return AlpacaClient()
 
-def _get_risk():
-    from core.risk_manager import RiskManager
-    from core.alpaca_client import AlpacaClient
-    from core.market_data import MarketData
-    client = AlpacaClient()
-    md = MarketData(client)
-    rm = RiskManager()
-    vix = md.get_vix()
-    rm.update_vix(vix)
-    account = client.get_account()
-    rm.update_equity(account["equity"])
-    return rm, client
-
-
-# ── Page config ───────────────────────────────────────────────
+# ── Page Configuration ─────────────────────────────────────────
 st.set_page_config(
-    page_title="Cache Me — Trading Dashboard",
-    page_icon="💰",
+    page_title="Cache Me If You Can — Trading Terminal",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("💰 Cache Me — Options Alpha Agent Dashboard")
-st.caption(f"Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+# ── Custom CSS for High-End Financial Terminal UI ─────────────
+st.markdown("""
+<style>
+    /* Global styling */
+    .stApp {
+        background-color: #0d1117;
+        color: #e6edf3;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    /* Headers */
+    h1, h2, h3, h4 {
+        color: #ffffff;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+    }
+    
+    /* Top Bar */
+    .top-bar {
+        background: linear-gradient(135deg, #161b22 0%, #21262d 100%);
+        padding: 18px 24px;
+        border-radius: 8px;
+        border: 1px solid #30363d;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .terminal-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #58a6ff;
+        margin: 0;
+    }
+    
+    .status-badge {
+        background-color: #238636;
+        color: #ffffff;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Metric Cards */
+    .metric-card {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 12px;
+    }
+    
+    .metric-label {
+        font-size: 12px;
+        color: #8b949e;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
+    
+    .metric-value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #f0f6fc;
+    }
+    
+    .metric-change-pos {
+        color: #3fb950;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    
+    .metric-change-neg {
+        color: #f85149;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    
+    /* Section containers */
+    .section-box {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 18px 20px;
+        margin-bottom: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Controls")
+    st.markdown("### System Controls")
     auto_refresh = st.toggle("Auto-refresh (30s)", value=True)
     st.divider()
-    st.markdown("**Links**")
-    st.markdown("- [Alpaca Paper Account](https://app.alpaca.markets/paper/dashboard/overview)")
-    st.markdown("- [Hackathon Page](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)")
-    st.markdown("- [GitHub Repo](https://github.com/Pranav1173/Alpaca-AI-Trading-Agents-Hackathon)")
+    st.markdown("### Resources")
+    st.markdown("- [Alpaca Paper Console](https://app.alpaca.markets/paper/dashboard/overview)")
+    st.markdown("- [Hackathon Portal](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)")
+    st.markdown("- [GitHub Codebase](https://github.com/Pranav1173/Alpaca-AI-Trading-Agents-Hackathon)")
+    st.divider()
+    st.caption("Team: Cache Me If You Can")
+    st.caption("Strategy: Multi-Agent Options Alpha")
 
-# ── Load Data ─────────────────────────────────────────────────
+# ── Top Bar Header ─────────────────────────────────────────────
+now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+st.markdown(f"""
+<div class="top-bar">
+    <div>
+        <div class="terminal-title">Cache Me If You Can — Options Alpha Terminal</div>
+        <div style="font-size: 12px; color: #8b949e; margin-top: 4px;">Real-time Alpaca Paper Trading Monitor | System Clock: {now_utc}</div>
+    </div>
+    <div>
+        <span class="status-badge">LIVE TRADING</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 STARTING_BALANCE = 100_000.0
 
 try:
@@ -87,124 +173,181 @@ try:
     account = client.get_account()
     positions = client.get_all_positions()
 
-    equity = account["equity"]
-    cash = account["cash"]
-    buying_power = account["buying_power"]
+    equity = float(account["equity"])
+    cash = float(account["cash"])
+    buying_power = float(account["buying_power"])
+    account_id = str(account.get("id", ""))
     total_pnl = equity - STARTING_BALANCE
-    total_pnl_pct = total_pnl / STARTING_BALANCE * 100
+    total_pnl_pct = (total_pnl / STARTING_BALANCE) * 100
 
     data_loaded = True
 except Exception as e:
-    st.error(f"⚠️ Could not connect to Alpaca API: {e}")
-    st.info("Set your ALPACA_API_KEY and ALPACA_SECRET_KEY in .env")
+    st.error(f"Broker connection offline: {e}")
+    st.info("Ensure ALPACA_API_KEY and ALPACA_SECRET_KEY are configured in .env")
     data_loaded = False
 
 # ── Metrics Row ────────────────────────────────────────────────
 if data_loaded:
-    col1, col2, col3, col4 = st.columns(4)
+    m1, m2, m3, m4 = st.columns(4)
+    
+    pnl_class = "metric-change-pos" if total_pnl >= 0 else "metric-change-neg"
+    pnl_sign = "+" if total_pnl >= 0 else ""
 
-    with col1:
-        st.metric(
-            label="💼 Portfolio Equity",
-            value=f"${equity:,.2f}",
-            delta=f"${total_pnl:+,.2f} ({total_pnl_pct:+.2f}%)",
-            delta_color="normal",
-        )
-    with col2:
-        st.metric("💵 Cash", f"${cash:,.2f}")
-    with col3:
-        st.metric("📊 Open Positions", len(positions))
-    with col4:
-        st.metric(
-            "⚡ Buying Power",
-            f"${buying_power:,.2f}",
-            help="Available margin for new positions",
-        )
+    with m1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Portfolio Equity</div>
+            <div class="metric-value">${equity:,.2f}</div>
+            <div class="{pnl_class}">{pnl_sign}${total_pnl:,.2f} ({pnl_sign}{total_pnl_pct:.2f}%)</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.divider()
+    with m2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Cash Balance</div>
+            <div class="metric-value">${cash:,.2f}</div>
+            <div style="font-size: 13px; color: #8b949e;">Collected Premium: +${cash - STARTING_BALANCE:,.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # ── P&L Gauge ───────────────────────────────────────────────
-    col_gauge, col_positions = st.columns([1, 2])
+    with m3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Active Options Contracts</div>
+            <div class="metric-value">{len(positions)}</div>
+            <div style="font-size: 13px; color: #8b949e;">Market Exposure Active</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    with col_gauge:
-        st.subheader("📈 Total P&L")
+    with m4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Buying Power</div>
+            <div class="metric-value">${buying_power:,.2f}</div>
+            <div style="font-size: 13px; color: #8b949e;">Account: {account_id[:8]}...</div>
+        </div>
+        """, unsafe_allow_html=True)
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Performance Gauge & Positions Table ─────────────────────
+    col_left, col_right = st.columns([1, 2])
+
+    with col_left:
+        st.markdown("### Portfolio Performance")
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number+delta",
             value=equity,
-            number={"prefix": "$", "valueformat": ",.0f"},
+            number={"prefix": "$", "valueformat": ",.0f", "font": {"color": "#ffffff", "size": 28}},
             delta={
                 "reference": STARTING_BALANCE,
-                "valueformat": ",.0f",
+                "valueformat": ",.2f",
                 "prefix": "$",
+                "increasing": {"color": "#3fb950"},
+                "decreasing": {"color": "#f85149"},
             },
             gauge={
-                "axis": {"range": [STARTING_BALANCE * 0.8, STARTING_BALANCE * 1.5]},
-                "bar": {"color": "green" if total_pnl >= 0 else "red"},
+                "axis": {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE * 1.25], "tickcolor": "#8b949e"},
+                "bar": {"color": "#58a6ff"},
+                "bgcolor": "#161b22",
+                "bordercolor": "#30363d",
                 "steps": [
-                    {"range": [STARTING_BALANCE * 0.8, STARTING_BALANCE], "color": "lightcoral"},
-                    {"range": [STARTING_BALANCE, STARTING_BALANCE * 1.5], "color": "lightgreen"},
+                    {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE], "color": "#2d1619"},
+                    {"range": [STARTING_BALANCE, STARTING_BALANCE * 1.25], "color": "#16281e"},
                 ],
                 "threshold": {
-                    "line": {"color": "gold", "width": 3},
+                    "line": {"color": "#d29922", "width": 3},
                     "thickness": 0.85,
                     "value": STARTING_BALANCE,
                 },
             },
-            title={"text": f"Starting: $100,000"},
+            title={"text": "Baseline: $100,000", "font": {"color": "#8b949e", "size": 14}},
         ))
-        fig_gauge.update_layout(height=300, margin=dict(t=40, b=0))
+        fig_gauge.update_layout(
+            height=310,
+            margin=dict(t=30, b=10, l=20, r=20),
+            paper_bgcolor="#161b22",
+            plot_bgcolor="#161b22",
+        )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    # ── Positions Table ──────────────────────────────────────────
-    with col_positions:
-        st.subheader("📋 Open Positions")
+    with col_right:
+        st.markdown("### Open Positions")
         if positions:
-            import pandas as pd
             df = pd.DataFrame(positions)
-            df["unrealized_pl"] = df["unrealized_pl"].apply(lambda x: f"${float(x):+,.2f}")
-            df["market_value"] = df["market_value"].apply(lambda x: f"${float(x):,.2f}")
-            df["avg_entry_price"] = df["avg_entry_price"].apply(lambda x: f"${float(x):.2f}")
-            st.dataframe(
-                df[["symbol", "qty", "avg_entry_price", "market_value", "unrealized_pl", "asset_class"]],
-                use_container_width=True,
-                hide_index=True,
-            )
+            
+            # Format dataframe for professional display
+            display_df = pd.DataFrame({
+                "Contract": df["symbol"],
+                "Qty": df["qty"].astype(float).map("{:+.1f}".format),
+                "Entry Price": df["avg_entry_price"].astype(float).map("${:,.2f}".format),
+                "Market Value": df["market_value"].astype(float).map("${:,.2f}".format),
+                "Unrealized P&L": df["unrealized_pl"].astype(float).map("${:+,.2f}".format),
+                "Asset Class": df["asset_class"].str.upper(),
+            })
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
         else:
-            st.info("No open positions yet — agents will open positions at market open.")
+            st.info("No open positions. Orchestrator scans and enters orders at session triggers.")
 
-    st.divider()
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Risk Summary ────────────────────────────────────────────
-    st.subheader("🛡️ Risk Dashboard")
+    # ── Risk Dashboard Panel ────────────────────────────────────
+    st.markdown("### Risk Manager & Circuit Breakers")
+    
     r1, r2, r3, r4 = st.columns(4)
 
-    daily_loss_limit = -0.02 * STARTING_BALANCE
-    daily_pnl = total_pnl  # simplified
+    daily_loss_limit = 2000.0  # 2% of $100k
+    daily_pnl = total_pnl
+    loss_remaining = max(0.0, daily_loss_limit + daily_pnl)
+
+    options_positions = [p for p in positions if "option" in str(p.get("asset_class", "")).lower()]
+    opt_exposure = sum(abs(float(p["market_value"])) for p in options_positions)
+    opt_pct = (opt_exposure / equity) * 100 if equity > 0 else 0.0
 
     with r1:
-        loss_remaining = daily_loss_limit - daily_pnl
-        st.metric("Daily Loss Remaining", f"${abs(loss_remaining):,.0f}",
-                  help="How much more we can lose today before halt")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Daily Loss Buffer</div>
+            <div class="metric-value">${loss_remaining:,.2f}</div>
+            <div style="font-size: 13px; color: #8b949e;">Limit: -$2,000.00 (-2.0%)</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with r2:
-        options_positions = [p for p in positions if "option" in p.get("asset_class", "").lower()]
-        opt_exposure = sum(abs(float(p["market_value"])) for p in options_positions)
-        opt_pct = opt_exposure / equity * 100
-        color = "🟡" if opt_pct > 20 else "🟢"
-        st.metric(f"{color} Options Exposure", f"{opt_pct:.1f}%",
-                  help="Target: < 30% of equity")
+        exposure_color = "#3fb950" if opt_pct <= 25.0 else "#d29922"
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Options Exposure</div>
+            <div class="metric-value" style="color: {exposure_color};">{opt_pct:.1f}%</div>
+            <div style="font-size: 13px; color: #8b949e;">Hard Gate Cap: 30.0%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with r3:
-        st.metric("🎯 Max Position Size", f"${equity * 0.05:,.0f}",
-                  help="5% of equity per position")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">Single Position Cap</div>
+            <div class="metric-value">${equity * 0.05:,.0f}</div>
+            <div style="font-size: 13px; color: #8b949e;">Max 5.0% of Portfolio</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with r4:
-        st.metric("☠️ VIX Kill Switch", "VIX > 35",
-                  help="All new orders halted above this level")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">VIX Circuit Breaker</div>
+            <div class="metric-value">VIX &ge; 35.0</div>
+            <div style="font-size: 13px; color: #8b949e;">Auto Order Halt Active</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── Footer ─────────────────────────────────────────────────────
 st.divider()
-st.caption("Cache Me | Alpaca AI Trading Agents Hackathon 2026 | lablab.ai × Alpaca")
+st.caption("Cache Me If You Can | Alpaca AI Trading Agents Hackathon 2026 | lablab.ai x Alpaca")
 
-# ── Auto-refresh ───────────────────────────────────────────────
+# ── Auto-refresh Trigger ───────────────────────────────────────
 if auto_refresh:
     time.sleep(30)
     st.rerun()

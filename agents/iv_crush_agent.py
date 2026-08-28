@@ -98,7 +98,7 @@ class IVCrushAgent:
                     self.rm.add_earnings_event(event_dt)
                     actions.append(action)
             except RiskViolation as e:
-                console.print(f"[yellow]⚠ Risk block [{symbol} straddle]: {e}[/yellow]")
+                console.print(f"[yellow][RISK BLOCK] [{symbol} straddle]: {e}[/yellow]")
             except Exception as e:
                 log.error(f"Straddle entry error [{symbol}]: {e}")
 
@@ -160,7 +160,7 @@ class IVCrushAgent:
         self.active_positions[symbol] = action
 
         console.print(
-            f"[green]✅ IVCrush SOLD STRADDLE: {symbol} ${atm_strike:.0f} "
+            f"[green][FILLED] IVCrush SOLD STRADDLE: {symbol} ${atm_strike:.0f} "
             f"exp={call['expiration']} x{n_contracts}[/green]"
         )
         return action
@@ -176,7 +176,7 @@ class IVCrushAgent:
 
             in_positions = call_sym in positions or put_sym in positions
             if not in_positions:
-                console.print(f"[green]💰 {symbol} straddle expired — max profit![/green]")
+                console.print(f"[green][EXPIRED] {symbol} straddle expired (max profit)[/green]")
                 del self.active_positions[symbol]
                 continue
 

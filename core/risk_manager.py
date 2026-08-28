@@ -173,7 +173,7 @@ class RiskManager:
             check()
 
         log.info(
-            f"✅ Order APPROVED: {symbol} | value=${order_value:,.0f} "
+            f"[APPROVED] Order APPROVED: {symbol} | value=${order_value:,.0f} "
             f"| delta_impact={delta_impact:+.2f} | option={is_option}"
         )
 

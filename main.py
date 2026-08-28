@@ -47,7 +47,7 @@ console = Console()
 
 def run_session() -> None:
     """Run a single trading session."""
-    console.rule("[bold green]🚀 Cache Me — Starting Trading Session[/bold green]")
+    console.rule("[bold green]Cache Me If You Can — Starting Trading Session[/bold green]")
     orch = Orchestrator()
     summary = orch.run_session()
     console.print(f"\n[bold]Session complete. P&L: [{'green' if summary['daily_pnl'] >= 0 else 'red'}]${summary['daily_pnl']:+,.2f}[/][/bold]")
@@ -58,7 +58,7 @@ def show_status() -> None:
     from core.alpaca_client import AlpacaClient
     from core.risk_manager import RiskManager
 
-    console.rule("[bold cyan]Cache Me — Account Status[/bold cyan]")
+    console.rule("[bold cyan]Cache Me If You Can — Account Status[/bold cyan]")
     client = AlpacaClient()
     account = client.get_account()
     positions = client.get_all_positions()
@@ -93,11 +93,11 @@ def show_status() -> None:
 
 def run_scheduled() -> None:
     """
-    Schedule daily trading sessions at market open (ET → UTC).
+    Schedule daily trading sessions at market open (ET -> UTC).
     Market opens at 09:30 ET = 14:30 UTC.
     Pre-scan at 09:00 ET = 14:00 UTC.
     """
-    console.rule("[bold blue]Cache Me — Scheduled Mode[/bold blue]")
+    console.rule("[bold blue]Cache Me If You Can — Scheduled Mode[/bold blue]")
     console.print("Sessions scheduled: 14:00 UTC (pre-scan) and 14:30 UTC (trading)")
 
     sched.every().day.at("14:00").do(lambda: log.info("Pre-market scan starting..."))

@@ -62,7 +62,7 @@ class Orchestrator:
     """
 
     def __init__(self) -> None:
-        console.rule("[bold blue]🤖 Cache Me — Orchestrator Starting[/bold blue]")
+        console.rule("[bold blue]Cache Me If You Can — Master Orchestrator[/bold blue]")
 
         # Core infrastructure
         self.client = AlpacaClient()
@@ -77,7 +77,7 @@ class Orchestrator:
         self.hedge = HedgeAgent(self.client, self.md, self.rm)
 
         self.session_log: list[dict] = []
-        console.print("[bold green]✅ All agents initialised[/bold green]")
+        console.print("[bold green]All agents initialised successfully[/bold green]")
 
     # ─────────────────────────────────────────
     # Main Session Runner

@@ -118,7 +118,7 @@ class HedgeAgent:
                 skip_earnings_check=True,
             )
         except RiskViolation as e:
-            console.print(f"[yellow]⚠ Hedge blocked: {e}[/yellow]")
+            console.print(f"[yellow][RISK BLOCK] Hedge blocked: {e}[/yellow]")
             return None
 
         result = self.client.place_option_market_order(contract["symbol"], n_contracts, "buy")
@@ -131,7 +131,7 @@ class HedgeAgent:
         }
 
         console.print(
-            f"[red]🛡 Hedge OPENED: SPY ${target_strike:.0f} put "
+            f"[red][FILLED] Hedge OPENED: SPY ${target_strike:.0f} put "
             f"exp={contract['expiration']} x{n_contracts} "
             f"| VIX={self.rm.current_vix:.1f} | delta={self.rm.portfolio_delta:.1f}[/red]"
         )
@@ -145,7 +145,7 @@ class HedgeAgent:
         qty = self.hedge_position["qty"]
         try:
             self.client.place_option_market_order(contract_sym, qty, "sell")
-            console.print(f"[blue]🛡 Hedge CLOSED: conditions normalised[/blue]")
+            console.print(f"[blue][CLOSED] Hedge CLOSED: conditions normalized[/blue]")
             closed = self.hedge_position.copy()
             self.hedge_position = None
             return {"agent": "Hedge", "action": "closed_hedge", **closed}

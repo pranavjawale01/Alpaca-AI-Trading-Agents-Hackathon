@@ -24,10 +24,10 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
-echo "═══════════════════════════════════════════"
-echo "  Cache Me Agent CLI — $TIMESTAMP"
+echo "==========================================="
+echo "  Cache Me If You Can Agent CLI — $TIMESTAMP"
 echo "  Mode: $MODE"
-echo "═══════════════════════════════════════════"
+echo "==========================================="
 
 # ── Check Alpaca CLI is installed ─────────────────────────────
 if ! command -v alpaca &> /dev/null; then
@@ -39,7 +39,7 @@ fi
 # ── Account Status ─────────────────────────────────────────────
 check_account() {
     echo ""
-    echo "📊 Account Status:"
+    echo "[STATUS] Account Details:"
     alpaca account get --output json | tee "$LOG_DIR/account_${TIMESTAMP}.json" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -52,7 +52,7 @@ print(f'  Buying Power: \${float(data[\"buying_power\"]):,.2f}')
 # ── Open Positions ─────────────────────────────────────────────
 check_positions() {
     echo ""
-    echo "📈 Open Positions:"
+    echo "[POSITIONS] Current Open Positions:"
     alpaca positions list --output json 2>/dev/null | tee "$LOG_DIR/positions_${TIMESTAMP}.json" | python3 -c "
 import json, sys
 positions = json.load(sys.stdin)
@@ -71,7 +71,7 @@ else:
 # ── Daily P&L ─────────────────────────────────────────────────
 check_pnl() {
     echo ""
-    echo "💰 Daily P&L Summary:"
+    echo "[PNL] Performance Summary:"
     alpaca account get --output json | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -89,14 +89,14 @@ print(f'  Total P&L:        {sign}\${pnl:,.2f} ({sign}{pct:.2f}%)')
 # ── Run Trading Session ────────────────────────────────────────
 run_session() {
     echo ""
-    echo "🚀 Starting trading session..."
+    echo "[SESSION] Starting autonomous trading session..."
     check_account
     check_positions
     echo ""
-    echo "🤖 Launching Python orchestrator..."
+    echo "[ORCHESTRATOR] Launching Python orchestrator..."
     python3 main.py run 2>&1 | tee "$LOG_DIR/session_${TIMESTAMP}.log"
     echo ""
-    echo "✅ Session complete."
+    echo "[SESSION] Session complete."
     check_pnl
     check_positions
 }

@@ -1,9 +1,14 @@
 """
-dashboard/monitor.py — Real-Time Trading & Portfolio Monitor.
+dashboard/monitor.py — Real-Time Trading Terminal with Interactive Graphs.
 
 Professional financial dashboard for the Cache Me If You Can trading system.
-Styled with modern typography, dark-mode financial cards, live P&L gauge,
-real-time open positions, and risk management limits.
+Features:
+  - Real-time Portfolio KPIs (Equity, Cash, Buying Power, Active Positions)
+  - Interactive Candlestick + Volume Chart with 20/50 EMA Technical Overlays
+  - Options Payoff & Risk Profile Curve Simulator
+  - Asset Allocation & Margin Donut Chart
+  - Live Positions Table with Real-Time P&L
+  - Risk Management & Circuit Breakers Monitor
 
 Run: streamlit run dashboard/monitor.py
 """
@@ -31,8 +36,10 @@ if sys.stdout.encoding != "utf-8":
     except Exception:
         pass
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 def _get_client():
@@ -66,7 +73,7 @@ st.markdown("""
     /* Top Bar */
     .top-bar {
         background: linear-gradient(135deg, #161b22 0%, #21262d 100%);
-        padding: 18px 24px;
+        padding: 16px 24px;
         border-radius: 8px;
         border: 1px solid #30363d;
         margin-bottom: 20px;
@@ -127,30 +134,37 @@ st.markdown("""
         font-size: 14px;
         font-weight: 600;
     }
-    
-    /* Section containers */
-    .section-box {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 18px 20px;
-        margin-bottom: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ────────────────────────────────────────────────────
+# ── Sidebar Controls ───────────────────────────────────────────
 with st.sidebar:
     st.markdown("### System Controls")
     auto_refresh = st.toggle("Auto-refresh (30s)", value=True)
     st.divider()
-    st.markdown("### Resources")
+    
+    st.markdown("### Interactive Chart Controls")
+    chart_symbol = st.selectbox(
+        "Select Watchlist Asset",
+        options=["SPY", "QQQ", "IWM", "GLD", "PLTR", "NVDA", "TSLA", "SOFI"],
+        index=0
+    )
+    chart_timeframe = st.selectbox(
+        "Timeframe",
+        options=["1Day", "1Hour", "15Min"],
+        index=0
+    )
+    show_emas = st.checkbox("Overlay 20 & 50 EMAs", value=True)
+    show_volume = st.checkbox("Show Volume Subplot", value=True)
+    
+    st.divider()
+    st.markdown("### Links & Resources")
     st.markdown("- [Alpaca Paper Console](https://app.alpaca.markets/paper/dashboard/overview)")
     st.markdown("- [Hackathon Portal](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)")
     st.markdown("- [GitHub Codebase](https://github.com/Pranav1173/Alpaca-AI-Trading-Agents-Hackathon)")
     st.divider()
     st.caption("Team: Cache Me If You Can")
-    st.caption("Strategy: Multi-Agent Options Alpha")
+    st.caption("Strategy: Autonomous Options Alpha")
 
 # ── Top Bar Header ─────────────────────────────────────────────
 now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -216,7 +230,7 @@ if data_loaded:
         <div class="metric-card">
             <div class="metric-label">Active Options Contracts</div>
             <div class="metric-value">{len(positions)}</div>
-            <div style="font-size: 13px; color: #8b949e;">Market Exposure Active</div>
+            <div style="font-size: 13px; color: #8b949e;">Live Options Exposure</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -231,11 +245,217 @@ if data_loaded:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ── Interactive Charts Tabs ─────────────────────────────────
+    st.markdown("### Interactive Market Analytics & Strategy Curves")
+    tab_market, tab_payoff, tab_allocation = st.tabs([
+        "Live Market Candlestick & Indicators",
+        "Options Payoff & Risk Profile",
+        "Capital & Margin Allocation"
+    ])
+
+    # ── TAB 1: Interactive Candlestick + Volume Chart ──────────
+    with tab_market:
+        try:
+            # Map timeframe string
+            tf_limit = 60 if chart_timeframe == "1Day" else 100
+            bars = client.get_bars(chart_symbol, timeframe=chart_timeframe, limit=tf_limit)
+            
+            if bars and len(bars) > 5:
+                df_bars = pd.DataFrame(bars)
+                df_bars["t"] = pd.to_datetime(df_bars["t"])
+                
+                # Compute EMAs
+                if show_emas:
+                    df_bars["ema_fast"] = df_bars["c"].ewm(span=20, adjust=False).mean()
+                    df_bars["ema_slow"] = df_bars["c"].ewm(span=50, adjust=False).mean()
+
+                # Subplots: Row 1 = Candlestick, Row 2 = Volume
+                if show_volume:
+                    fig_market = make_subplots(
+                        rows=2, cols=1,
+                        shared_xaxes=True,
+                        vertical_spacing=0.04,
+                        row_heights=[0.75, 0.25]
+                    )
+                else:
+                    fig_market = go.Figure()
+
+                # Candlestick Trace
+                candlestick = go.Candlestick(
+                    x=df_bars["t"],
+                    open=df_bars["o"],
+                    high=df_bars["h"],
+                    low=df_bars["l"],
+                    close=df_bars["c"],
+                    name=f"{chart_symbol} OHLC",
+                    increasing_line_color="#3fb950",
+                    decreasing_line_color="#f85149",
+                )
+                
+                if show_volume:
+                    fig_market.add_trace(candlestick, row=1, col=1)
+                else:
+                    fig_market.add_trace(candlestick)
+
+                # EMA Overlays
+                if show_emas:
+                    fast_trace = go.Scatter(
+                        x=df_bars["t"], y=df_bars["ema_fast"],
+                        name="20 EMA",
+                        line=dict(color="#58a6ff", width=1.5),
+                    )
+                    slow_trace = go.Scatter(
+                        x=df_bars["t"], y=df_bars["ema_slow"],
+                        name="50 EMA",
+                        line=dict(color="#d29922", width=1.5),
+                    )
+                    if show_volume:
+                        fig_market.add_trace(fast_trace, row=1, col=1)
+                        fig_market.add_trace(slow_trace, row=1, col=1)
+                    else:
+                        fig_market.add_trace(fast_trace)
+                        fig_market.add_trace(slow_trace)
+
+                # Volume Subplot
+                if show_volume:
+                    colors = [
+                        "#3fb950" if c >= o else "#f85149"
+                        for c, o in zip(df_bars["c"], df_bars["o"])
+                    ]
+                    vol_trace = go.Bar(
+                        x=df_bars["t"], y=df_bars["v"],
+                        name="Volume",
+                        marker_color=colors,
+                        opacity=0.8
+                    )
+                    fig_market.add_trace(vol_trace, row=2, col=1)
+
+                fig_market.update_layout(
+                    title=dict(
+                        text=f"{chart_symbol} ({chart_timeframe}) — Price Action & Technical Momentum",
+                        font=dict(color="#ffffff", size=16)
+                    ),
+                    height=520,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                    paper_bgcolor="#161b22",
+                    plot_bgcolor="#161b22",
+                    xaxis=dict(gridcolor="#21262d", rangeslider=dict(visible=False)),
+                    yaxis=dict(gridcolor="#21262d", title="Price (USD)"),
+                    yaxis2=dict(gridcolor="#21262d", title="Volume") if show_volume else None,
+                    legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center", font=dict(color="#8b949e")),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_market, use_container_width=True)
+            else:
+                st.info(f"Loading historical market bars for {chart_symbol}...")
+        except Exception as e:
+            st.warning(f"Could not load market chart for {chart_symbol}: {e}")
+
+    # ── TAB 2: Interactive Options Payoff Curve ─────────────────
+    with tab_payoff:
+        st.markdown("#### Options Expiration Payoff & Risk Profile")
+        st.caption("Interactive theoretical P&L simulator for currently held options positions.")
+        
+        # Simulate payoff curve for short put positions (e.g. SPY 695 Put, IWM 267 Put)
+        if positions:
+            for p in positions:
+                sym = p["symbol"]
+                qty = float(p["qty"])
+                avg_price = float(p["avg_entry_price"])
+                
+                # Check if short put
+                if "P" in sym and qty < 0:
+                    # Extract strike from OCC symbol e.g. SPY260925P00695000 -> 695
+                    try:
+                        strike = float(sym[-8:]) / 1000.0
+                    except Exception:
+                        strike = 500.0
+                    
+                    premium = avg_price
+                    contracts = abs(qty)
+                    max_profit = premium * 100 * contracts
+                    breakeven = strike - premium
+                    
+                    # Generate spot price range
+                    spot_prices = np.linspace(strike * 0.85, strike * 1.10, 100)
+                    # Short Put Payoff = Premium - max(Strike - S, 0)
+                    payoffs = [
+                        (premium - max(strike - s, 0.0)) * 100 * contracts
+                        for s in spot_prices
+                    ]
+                    
+                    fig_payoff = go.Figure()
+                    
+                    # Payoff Curve
+                    fig_payoff.add_trace(go.Scatter(
+                        x=spot_prices, y=payoffs,
+                        mode="lines",
+                        name="P&L at Expiration",
+                        line=dict(color="#58a6ff", width=2.5),
+                        fill="tozeroy",
+                        fillcolor="rgba(88, 166, 255, 0.1)"
+                    ))
+                    
+                    # Zero Line
+                    fig_payoff.add_hline(y=0, line_dash="dash", line_color="#8b949e", annotation_text="Break-Even Line")
+                    # Strike Line
+                    fig_payoff.add_vline(x=strike, line_dash="dot", line_color="#d29922", annotation_text=f"Strike: ${strike:.0f}")
+                    # Break-even Vertical Line
+                    fig_payoff.add_vline(x=breakeven, line_dash="dot", line_color="#f85149", annotation_text=f"BE: ${breakeven:.2f}")
+
+                    fig_payoff.update_layout(
+                        title=dict(
+                            text=f"Position Payoff: {sym} (Short {contracts:.0f}x Put @ Strike ${strike:.0f} | Max Profit: +${max_profit:.2f})",
+                            font=dict(color="#ffffff", size=15)
+                        ),
+                        height=380,
+                        margin=dict(t=45, b=20, l=20, r=20),
+                        paper_bgcolor="#161b22",
+                        plot_bgcolor="#161b22",
+                        xaxis=dict(gridcolor="#21262d", title="Underlying Asset Spot Price (USD)"),
+                        yaxis=dict(gridcolor="#21262d", title="Net Profit / Loss ($ USD)"),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_payoff, use_container_width=True)
+        else:
+            st.info("No active options positions. Payoff curve will automatically display once orders are filled.")
+
+    # ── TAB 3: Capital & Margin Allocation Donut ───────────────
+    with tab_allocation:
+        st.markdown("#### Portfolio Capital & Margin Distribution")
+        
+        opt_exposure = sum(abs(float(p["market_value"])) for p in positions)
+        free_cash = max(0.0, cash - opt_exposure)
+        
+        alloc_labels = ["Free Unencumbered Cash", "Options Collateral & Margin", "Allocated Buffer"]
+        alloc_values = [free_cash, opt_exposure, max(0.0, equity - free_cash - opt_exposure)]
+        alloc_colors = ["#238636", "#1f6feb", "#8b949e"]
+
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=alloc_labels,
+            values=alloc_values,
+            hole=0.55,
+            marker=dict(colors=alloc_colors, line=dict(color="#0d1117", width=2)),
+            textinfo="label+percent",
+            insidetextorientation="radial"
+        )])
+        fig_pie.update_layout(
+            height=380,
+            margin=dict(t=30, b=20, l=20, r=20),
+            paper_bgcolor="#161b22",
+            plot_bgcolor="#161b22",
+            font=dict(color="#e6edf3"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # ── Performance Gauge & Positions Table ─────────────────────
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        st.markdown("### Portfolio Performance")
+        st.markdown("### Portfolio Performance Gauge")
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number+delta",
             value=equity,

@@ -196,7 +196,7 @@ except Exception as e:
 
 if data_loaded:
     # Top-level Tabs for Clean UI
-    tab_overview, tab_charts = st.tabs(["📊 Portfolio Overview", "📈 Market Charts & Analytics"])
+    tab_overview, tab_charts = st.tabs(["Portfolio Overview", "Market Charts & Analytics"])
 
     with tab_overview:
         # ── Metrics Row ────────────────────────────────────────────────

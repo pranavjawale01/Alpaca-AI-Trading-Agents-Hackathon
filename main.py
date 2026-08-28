@@ -15,6 +15,15 @@ Usage:
 from __future__ import annotations
 
 import sys
+import os
+
+# Force UTF-8 output on Windows (avoids cp1252 UnicodeEncodeError with Rich)
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
+
 import logging
 import time
 from datetime import datetime, timezone

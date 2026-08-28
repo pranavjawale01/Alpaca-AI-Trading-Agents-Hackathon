@@ -56,20 +56,21 @@ class MarketData:
 
     def get_vix(self) -> float:
         """
-        Fetch VIX level via Alpaca (VIX = ticker 'VIXY' as proxy,
-        or fallback to a static value during pre-market).
-        Returns VIX as a float (e.g. 18.5).
+        Estimate VIX using VIXY ETF price as a proxy.
+        VIXY tracks short-term VIX futures — its price is roughly in the 15-30
+        range mirroring VIX. We use it directly (no scaling needed).
+        Falls back to 18.0 if unavailable.
         """
         try:
-            # VIXY is the VIX ETF — a reasonable real-time proxy
+            # VIXY price ≈ VIX level (both typically 12-40 range)
             quote = self.client.get_latest_quote("VIXY")
-            # VIXY ≈ VIX/10 roughly; adjust scale heuristically
-            vix_approx = quote["mid"] * 10
-            log.info(f"VIX proxy (VIXY): {vix_approx:.1f}")
+            vix_approx = quote["mid"]
+            log.info(f"VIX proxy (VIXY price): {vix_approx:.1f}")
             return vix_approx
         except Exception as e:
             log.warning(f"VIX fetch failed, using default: {e}")
             return 18.0  # reasonable default
+
 
     # ─────────────────────────────────────────
     # Moving Averages / EMA Signal
@@ -104,11 +105,16 @@ class MarketData:
         bars = self.client.get_bars(symbol, "1Day", limit=slow + 10)
         closes = [b["c"] for b in bars]
 
+        if len(closes) < slow + 2:
+            log.warning(f"[{symbol}] Not enough bars ({len(closes)}) for EMA signal")
+            return {"symbol": symbol, "ema_fast": 0, "ema_slow": 0, "signal": "neutral", "crossover": False}
+
         ema_fast = self._ema(closes, fast)
         ema_slow = self._ema(closes, slow)
 
         prev_fast = self._ema(closes[:-1], fast)
         prev_slow = self._ema(closes[:-1], slow)
+
 
         crossover = (prev_fast < prev_slow) and (ema_fast > ema_slow)
         if ema_fast > ema_slow * 1.002:
@@ -137,8 +143,16 @@ class MarketData:
         """
         bars = self.client.get_bars(symbol, "1Day", limit=lookback + 1)
         volumes = [b["v"] for b in bars]
-        avg_volume = np.mean(volumes[:-1])
-        today_volume = volumes[-1]
+        if len(volumes) < 2:
+            return {
+                "symbol": symbol,
+                "today_volume": 0.0,
+                "avg_volume": 1.0,
+                "surge_ratio": 1.0,
+                "is_surging": False,
+            }
+        avg_volume = float(np.mean(volumes[:-1]))
+        today_volume = float(volumes[-1])
         surge_ratio = today_volume / avg_volume if avg_volume > 0 else 1.0
 
         return {
@@ -157,13 +171,18 @@ class MarketData:
         """
         Estimate 30-day historical volatility (annualised) from daily closes.
         Used as a proxy for IV when live options data isn't available.
+        Returns a default of 0.20 (20%) if insufficient data.
         """
         bars = self.client.get_bars(symbol, "1Day", limit=window + 5)
         closes = np.array([b["c"] for b in bars])
+        if len(closes) < 5:
+            log.warning(f"[{symbol}] Not enough bars for vol estimate, using 20% default")
+            return 0.20
         log_returns = np.diff(np.log(closes))
         daily_vol = np.std(log_returns)
         annual_vol = daily_vol * np.sqrt(252)
-        return float(annual_vol)
+        return float(annual_vol) if annual_vol > 0 else 0.20
+
 
     # ─────────────────────────────────────────
     # ATM Strike Finder

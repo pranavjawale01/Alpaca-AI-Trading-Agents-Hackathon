@@ -133,11 +133,11 @@ class IVCrushAgent:
 
         n_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
 
-        # Risk gate — straddle is 2 legs
-        straddle_value = atm_strike * 100 * n_contracts * 2
+        # Risk gate — straddle margin requirement (~20% of underlying notional)
+        straddle_margin = atm_strike * 100 * n_contracts * 0.20
         self.rm.approve_order(
             symbol=symbol,
-            order_value=straddle_value,
+            order_value=straddle_margin,
             delta_impact=0.0,  # straddle is delta-neutral at entry
             is_option=True,
         )

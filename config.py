@@ -78,9 +78,9 @@ RISK = RiskConfig()
 class UniverseConfig:
     """Symbols each agent watches."""
 
-    # Theta Collector — liquid, high-IV ETFs for CSP selling
+    # Theta Collector — liquid, high-IV ETFs and stocks for CSP selling
     theta_symbols: list = field(
-        default_factory=lambda: ["SPY", "QQQ", "IWM", "GLD"]
+        default_factory=lambda: ["SPY", "QQQ", "IWM", "GLD", "SLV", "PLTR", "SOFI", "F"]
     )
 
     # Hedge Agent — portfolio protection

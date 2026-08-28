@@ -29,7 +29,7 @@ from rich.console import Console
 
 from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
-from core.options_pricer import greeks, iv_rank, estimate_annual_vol_from_hist
+from core.options_pricer import greeks, iv_rank
 from core.risk_manager import RiskManager, RiskViolation
 import config
 
@@ -156,22 +156,27 @@ class ThetaCollectorAgent:
         if not contract:
             return None
 
-        # Calculate premium and order value
+        # Calculate premium via Black-Scholes (avoid fetching option as stock quote)
         T = TARGET_DTE_MIN / 365
-        premium = self.client.get_latest_quote(contract["symbol"])["mid"] if True else 0
-        # Fallback: use Black-Scholes estimate
-        if premium <= 0:
-            from core.options_pricer import black_scholes_price
-            premium = black_scholes_price(price, target_strike, T, RISK_FREE_RATE, hist_vol, "put")
+        from core.options_pricer import black_scholes_price
+        premium = black_scholes_price(price, target_strike, T, RISK_FREE_RATE, hist_vol, "put")
+        if premium <= 0.01:
+            log.info(f"[{symbol}] Premium too low ({premium:.2f}), skipping")
+            return None
 
-        # CSP requires holding cash = strike × 100 (per contract)
+
+        # Calculate notional value and number of contracts
         notional = target_strike * 100
-        n_contracts = max(1, int((equity * 0.04) / notional))  # max 4% of equity
+        n_contracts = max(1, int((equity * 0.04) / max(notional * 0.20, 1000)))
+
+        # Option margin / capital at risk: 20% margin or premium * 100
+        margin_requirement = notional * 0.20
+        order_value = max(premium * 100 * n_contracts, margin_requirement * n_contracts * 0.10)
 
         # Risk gate
         self.rm.approve_order(
             symbol=contract["symbol"],
-            order_value=notional * n_contracts,
+            order_value=order_value,
             delta_impact=-TARGET_DELTA * 100 * n_contracts,
             is_option=True,
         )

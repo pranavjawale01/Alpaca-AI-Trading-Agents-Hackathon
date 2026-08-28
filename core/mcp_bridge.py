@@ -99,14 +99,23 @@ class MCPBridge:
                            If None, tool calls will be simulated/logged.
         """
         self.alpaca_client = alpaca_client
+        self.model = config.FEATHERLESS_MODEL
 
         # Featherless AI client (OpenAI-compatible)
-        self.llm = OpenAI(
-            api_key=config.FEATHERLESS_API_KEY,
-            base_url=config.FEATHERLESS_BASE_URL,
-        )
-        self.model = config.FEATHERLESS_MODEL
-        console.print(f"[green]✓ MCPBridge initialised | model={self.model}[/green]")
+        self.llm = None
+        self._llm_available = False
+        if config.FEATHERLESS_API_KEY:
+            try:
+                self.llm = OpenAI(
+                    api_key=config.FEATHERLESS_API_KEY,
+                    base_url=config.FEATHERLESS_BASE_URL,
+                )
+                self._llm_available = True
+                console.print(f"[green]OK MCPBridge initialised | model={self.model}[/green]")
+            except Exception as e:
+                log.warning(f"MCPBridge: LLM init failed ({e}) — running without LLM")
+        else:
+            console.print("[yellow]MCPBridge: No FEATHERLESS_API_KEY — LLM disabled, rules-based fallback active[/yellow]")
 
     def query(
         self,
@@ -143,6 +152,11 @@ class MCPBridge:
             })
         else:
             messages.append({"role": "user", "content": user_message})
+
+        # Fallback when LLM is not configured
+        if not self._llm_available:
+            log.debug("MCPBridge: LLM not available, returning empty response")
+            return "[]"
 
         try:
             response = self.llm.chat.completions.create(

@@ -63,7 +63,7 @@ class AlpacaClient:
             api_key=config.ALPACA_API_KEY,
             secret_key=config.ALPACA_SECRET_KEY,
         )
-        console.print("[green]✓ AlpacaClient initialised (paper trading)[/green]")
+        console.print("[green]OK AlpacaClient initialised (paper trading)[/green]")
 
     # ─────────────────────────────────────────
     # Account

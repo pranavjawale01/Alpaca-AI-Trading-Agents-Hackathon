@@ -387,7 +387,7 @@ if data_loaded:
         with f_col3:
             chart_style = st.selectbox(
                 "Style",
-                options=["Candlestick", "Line Chart", "OHLC Bars"],
+                options=["Candlestick", "Translucent Line Area", "OHLC Bars"],
                 index=0
             )
         with f_col4:
@@ -398,8 +398,8 @@ if data_loaded:
         with f_col5:
             indicator_selection = st.multiselect(
                 "Indicators",
-                options=["20 EMA", "50 EMA", "Bollinger Bands", "Volume", "RSI (14)"],
-                default=["20 EMA", "50 EMA", "Volume"]
+                options=["20 EMA", "50 EMA", "Bollinger Bands", "Volume Overlay", "RSI (14)"],
+                default=["20 EMA", "50 EMA", "Volume Overlay"]
             )
 
         # Fetch Data and Render Plotly Graph
@@ -429,17 +429,21 @@ if data_loaded:
                     df["rsi"] = 100 - (100 / (1 + rs))
 
                 # Determine Subplot Structure
-                has_volume = "Volume" in indicator_selection
+                has_volume = "Volume Overlay" in indicator_selection
                 has_rsi = "RSI (14)" in indicator_selection
 
-                rows = 1 + (1 if has_volume else 0) + (1 if has_rsi else 0)
-                row_heights = [0.65] if rows == 1 else ([0.65, 0.20] if rows == 2 else [0.55, 0.25, 0.20])
+                rows = 1 + (1 if has_rsi else 0)
+                row_heights = [0.8] if rows == 1 else ([0.75, 0.25])
+                specs = [[{"secondary_y": True}]]
+                if has_rsi:
+                    specs.append([{"secondary_y": False}])
 
                 fig = make_subplots(
                     rows=rows, cols=1,
                     shared_xaxes=True,
                     vertical_spacing=0.03,
-                    row_heights=row_heights
+                    row_heights=row_heights,
+                    specs=specs
                 )
 
                 # TradingView Classic Colors
@@ -458,8 +462,8 @@ if data_loaded:
                         name=f"{selected_asset}",
                         increasing_line_color=TV_GREEN, decreasing_line_color=TV_RED,
                         increasing_fillcolor=TV_GREEN, decreasing_fillcolor=TV_RED,
-                    ), row=1, col=1)
-                elif chart_style == "Line Chart":
+                    ), row=1, col=1, secondary_y=False)
+                elif chart_style == "Translucent Line Area":
                     fig.add_trace(go.Scatter(
                         x=df["t_str"], y=df["c"],
                         mode="lines",
@@ -467,35 +471,35 @@ if data_loaded:
                         line=dict(color="#2962FF", width=2),
                         fill="tozeroy",
                         fillcolor="rgba(41, 98, 255, 0.1)"
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
                 else:
                     fig.add_trace(go.Ohlc(
                         x=df["t_str"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
                         name=f"{selected_asset}",
                         increasing_line_color=TV_GREEN, decreasing_line_color=TV_RED
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
 
                 # 2. Overlays
                 if "20 EMA" in indicator_selection:
                     fig.add_trace(go.Scatter(
                         x=df["t_str"], y=df["ema20"], name="20 EMA",
                         line=dict(color="#2962FF", width=1.5)
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
                 if "50 EMA" in indicator_selection:
                     fig.add_trace(go.Scatter(
                         x=df["t_str"], y=df["ema50"], name="50 EMA",
                         line=dict(color="#FF9800", width=1.5)
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
                 if "Bollinger Bands" in indicator_selection:
                     fig.add_trace(go.Scatter(
                         x=df["t_str"], y=df["bb_upper"], name="BB Upper",
                         line=dict(color="#9C27B0", width=1, dash="dot")
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
                     fig.add_trace(go.Scatter(
                         x=df["t_str"], y=df["bb_lower"], name="BB Lower",
                         line=dict(color="#9C27B0", width=1, dash="dot"),
                         fill="tonexty", fillcolor="rgba(156, 39, 176, 0.05)"
-                    ), row=1, col=1)
+                    ), row=1, col=1, secondary_y=False)
 
                 # 3. Active Option Strike Level Lines
                 for p in positions:
@@ -507,21 +511,23 @@ if data_loaded:
                             fig.add_hline(
                                 y=strike_val, line_dash="dash", line_color="#FF9800",
                                 annotation_text=f"Active {opt_type}: ${strike_val:.0f}",
-                                row=1, col=1
+                                row=1, col=1, secondary_y=False
                             )
                         except Exception:
                             pass
 
-                current_row = 2
-                # 4. Volume Subplot
+                # 4. Translucent Volume Overlay on Main Chart (Secondary Y)
                 if has_volume:
                     v_colors = [TV_GREEN if c >= o else TV_RED for c, o in zip(df["c"], df["o"])]
                     fig.add_trace(go.Bar(
                         x=df["t_str"], y=df["v"], name="Volume",
-                        marker_color=v_colors, opacity=0.8
-                    ), row=current_row, col=1)
-                    fig.update_yaxes(gridcolor=TV_GRID, side="right", row=current_row, col=1)
-                    current_row += 1
+                        marker_color=v_colors, opacity=0.25
+                    ), row=1, col=1, secondary_y=True)
+                    # Scale volume so it only occupies the bottom 25% of the chart
+                    max_vol = df["v"].max()
+                    fig.update_yaxes(showgrid=False, range=[0, max_vol * 4], showticklabels=False, secondary_y=True, row=1, col=1)
+
+                current_row = 2
 
                 # 5. RSI Subplot
                 if has_rsi:

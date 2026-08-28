@@ -194,335 +194,355 @@ except Exception as e:
     st.info("Ensure ALPACA_API_KEY and ALPACA_SECRET_KEY are configured in .env")
     data_loaded = False
 
-# ── Metrics Row ────────────────────────────────────────────────
 if data_loaded:
-    m1, m2, m3, m4 = st.columns(4)
-    
-    pnl_class = "metric-change-pos" if total_pnl >= 0 else "metric-change-neg"
-    pnl_sign = "+" if total_pnl >= 0 else ""
+    # Top-level Tabs for Clean UI
+    tab_overview, tab_charts = st.tabs(["📊 Portfolio Overview", "📈 Market Charts & Analytics"])
 
-    with m1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Portfolio Equity</div>
-            <div class="metric-value">${equity:,.2f}</div>
-            <div class="{pnl_class}">{pnl_sign}${total_pnl:,.2f} ({pnl_sign}{total_pnl_pct:.2f}%)</div>
-        </div>
-        """, unsafe_allow_html=True)
+    with tab_overview:
+        # ── Metrics Row ────────────────────────────────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        
+        pnl_class = "metric-change-pos" if total_pnl >= 0 else "metric-change-neg"
+        pnl_sign = "+" if total_pnl >= 0 else ""
 
-    with m2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Cash Balance</div>
-            <div class="metric-value">${cash:,.2f}</div>
-            <div style="font-size: 13px; color: #8b949e;">Collected Premium: +${cash - STARTING_BALANCE:,.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        with m1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Portfolio Equity</div>
+                <div class="metric-value">${equity:,.2f}</div>
+                <div class="{pnl_class}">{pnl_sign}${total_pnl:,.2f} ({pnl_sign}{total_pnl_pct:.2f}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    with m3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Active Options Positions</div>
-            <div class="metric-value">{len(positions)}</div>
-            <div style="font-size: 13px; color: #8b949e;">Live Options Exposure</div>
-        </div>
-        """, unsafe_allow_html=True)
+        with m2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Cash Balance</div>
+                <div class="metric-value">${cash:,.2f}</div>
+                <div style="font-size: 13px; color: #8b949e;">Collected Premium: +${cash - STARTING_BALANCE:,.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    with m4:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Buying Power</div>
-            <div class="metric-value">${buying_power:,.2f}</div>
-            <div style="font-size: 13px; color: #8b949e;">Account: {account_id[:8]}...</div>
-        </div>
-        """, unsafe_allow_html=True)
+        with m3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Active Options Positions</div>
+                <div class="metric-value">{len(positions)}</div>
+                <div style="font-size: 13px; color: #8b949e;">Live Options Exposure</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+        with m4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Buying Power</div>
+                <div class="metric-value">${buying_power:,.2f}</div>
+                <div style="font-size: 13px; color: #8b949e;">Account: {account_id[:8]}...</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # ── Section 1: Portfolio Health & Positioning ────────────────
-    st.markdown("""
-    <div style="padding: 10px 0; border-bottom: 1px solid #30363d; margin-bottom: 20px;">
-        <h3 style="color: #58a6ff; margin: 0;">1. Portfolio Health & Capital Allocation</h3>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    health_col1, health_col2, health_col3 = st.columns([1, 1, 1.2])
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    with health_col1:
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=equity,
-            number={"prefix": "$", "valueformat": ",.0f", "font": {"color": "#ffffff", "size": 32}},
-            delta={
-                "reference": STARTING_BALANCE,
-                "valueformat": ",.2f",
-                "prefix": "$",
-                "increasing": {"color": "#3fb950"},
-                "decreasing": {"color": "#f85149"},
-            },
-            gauge={
-                "axis": {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE * 1.25], "tickcolor": "#8b949e"},
-                "bar": {"color": "#58a6ff"},
-                "bgcolor": "#161b22",
-                "bordercolor": "#30363d",
-                "steps": [
-                    {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE], "color": "#2d1619"},
-                    {"range": [STARTING_BALANCE, STARTING_BALANCE * 1.25], "color": "#16281e"},
-                ],
-                "threshold": {
-                    "line": {"color": "#d29922", "width": 3},
-                    "thickness": 0.85,
-                    "value": STARTING_BALANCE,
+        # ── Section 1: Portfolio Health & Positioning ────────────────
+        health_col1, health_col2 = st.columns([1, 1])
+
+        with health_col1:
+            st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px; text-align: center;'>Portfolio Performance</div>", unsafe_allow_html=True)
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=equity,
+                number={"prefix": "$", "valueformat": ",.0f", "font": {"color": "#ffffff", "size": 32}},
+                delta={
+                    "reference": STARTING_BALANCE,
+                    "valueformat": ",.2f",
+                    "prefix": "$",
+                    "increasing": {"color": "#3fb950"},
+                    "decreasing": {"color": "#f85149"},
                 },
-            },
-            title={"text": "Performance Baseline ($100k)", "font": {"color": "#8b949e", "size": 14}},
-        ))
-        fig_gauge.update_layout(
-            height=300,
-            margin=dict(t=40, b=10, l=20, r=20),
-            paper_bgcolor="#0d1117",
-            plot_bgcolor="#0d1117",
-        )
-        st.plotly_chart(fig_gauge, use_container_width=True)
-
-    with health_col2:
-        opt_exposure = sum(abs(float(p["market_value"])) for p in positions)
-        free_cash = max(0.0, cash - opt_exposure)
-        
-        alloc_labels = ["Unencumbered Free Cash", "Active Options Margin / Collateral", "Capital Buffer"]
-        alloc_values = [free_cash, opt_exposure, max(0.0, equity - free_cash - opt_exposure)]
-        alloc_colors = ["#238636", "#1f6feb", "#8b949e"]
-
-        fig_pie = go.Figure(data=[go.Pie(
-            labels=alloc_labels,
-            values=alloc_values,
-            hole=0.6,
-            marker=dict(colors=alloc_colors, line=dict(color="#0d1117", width=2)),
-            textinfo="label+percent",
-            insidetextorientation="radial"
-        )])
-        fig_pie.update_layout(
-            title=dict(text="Capital Distribution", font=dict(color="#8b949e", size=14)),
-            height=300,
-            margin=dict(t=40, b=10, l=20, r=20),
-            paper_bgcolor="#0d1117",
-            plot_bgcolor="#0d1117",
-            font=dict(color="#e6edf3"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    with health_col3:
-        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px; text-align: center;'>Open Option Contracts</div>", unsafe_allow_html=True)
-        if positions:
-            df_pos = pd.DataFrame(positions)
-            display_df = pd.DataFrame({
-                "Contract": df_pos["symbol"],
-                "Qty": df_pos["qty"].astype(float).map("{:+.1f}".format),
-                "Unrealized P&L": df_pos["unrealized_pl"].astype(float).map("${:+,.2f}".format),
-            })
-            st.dataframe(display_df, use_container_width=True, hide_index=True, height=250)
-        else:
-            st.info("No open positions. Orchestrator scans and enters orders at session triggers.")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Section 2: Market Intelligence & Analytics ───────────────
-    st.markdown("""
-    <div style="padding: 10px 0; border-bottom: 1px solid #30363d; margin-bottom: 20px;">
-        <h3 style="color: #d29922; margin: 0;">2. Market Intelligence & Asset Price Action</h3>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Sleek inline filters
-    f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
-    
-    with f_col1:
-        selected_asset = st.selectbox(
-            "Underlying Asset",
-            options=["SPY", "QQQ", "IWM", "GLD", "SLV", "PLTR", "SOFI", "NVDA", "TSLA", "VIXY"],
-            index=0
-        )
-    with f_col2:
-        timeframe_choice = st.selectbox(
-            "Bar Frequency",
-            options=["1Day", "1Hour", "15Min", "5Min"],
-            index=0
-        )
-    with f_col3:
-        chart_style = st.selectbox(
-            "Chart Type",
-            options=["Candlestick", "Line Chart (Close)", "OHLC Bars"],
-            index=0
-        )
-    with f_col4:
-        history_bars = st.slider(
-            "Historical Bars",
-            min_value=30, max_value=250, value=90, step=10
-        )
-    with f_col5:
-        indicator_selection = st.multiselect(
-            "Technical Overlays",
-            options=["20 EMA", "50 EMA", "Bollinger Bands", "Volume", "RSI (14)"],
-            default=["20 EMA", "50 EMA", "Volume"]
-        )
-
-    # Fetch Data and Render Plotly Graph
-    try:
-        bars = client.get_bars(selected_asset, timeframe=timeframe_choice, limit=history_bars)
-        
-        if bars and len(bars) >= 5:
-            df = pd.DataFrame(bars)
-            df["t"] = pd.to_datetime(df["t"])
-            df = df.sort_values("t").reset_index(drop=True)
-
-            # Compute Indicators
-            if "20 EMA" in indicator_selection:
-                df["ema20"] = df["c"].ewm(span=20, adjust=False).mean()
-            if "50 EMA" in indicator_selection:
-                df["ema50"] = df["c"].ewm(span=50, adjust=False).mean()
-            if "Bollinger Bands" in indicator_selection:
-                df["sma20"] = df["c"].rolling(window=20).mean()
-                df["std20"] = df["c"].rolling(window=20).std()
-                df["bb_upper"] = df["sma20"] + (df["std20"] * 2)
-                df["bb_lower"] = df["sma20"] - (df["std20"] * 2)
-            if "RSI (14)" in indicator_selection:
-                delta = df["c"].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss.replace(0, np.nan)
-                df["rsi"] = 100 - (100 / (1 + rs))
-
-            # Determine Subplot Structure
-            has_volume = "Volume" in indicator_selection
-            has_rsi = "RSI (14)" in indicator_selection
-
-            rows = 1 + (1 if has_volume else 0) + (1 if has_rsi else 0)
-            row_heights = [0.65] if rows == 1 else ([0.65, 0.20] if rows == 2 else [0.55, 0.25, 0.20])
-
-            fig = make_subplots(
-                rows=rows, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.03,
-                row_heights=row_heights
+                gauge={
+                    "axis": {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE * 1.25], "tickcolor": "#8b949e"},
+                    "bar": {"color": "#58a6ff"},
+                    "bgcolor": "#161b22",
+                    "bordercolor": "#30363d",
+                    "steps": [
+                        {"range": [STARTING_BALANCE * 0.85, STARTING_BALANCE], "color": "#2d1619"},
+                        {"range": [STARTING_BALANCE, STARTING_BALANCE * 1.25], "color": "#16281e"},
+                    ],
+                    "threshold": {
+                        "line": {"color": "#d29922", "width": 3},
+                        "thickness": 0.85,
+                        "value": STARTING_BALANCE,
+                    },
+                },
+                title={"text": "Baseline ($100k)", "font": {"color": "#8b949e", "size": 14}},
+            ))
+            fig_gauge.update_layout(
+                height=300,
+                margin=dict(t=40, b=10, l=20, r=20),
+                paper_bgcolor="#0d1117",
+                plot_bgcolor="#0d1117",
             )
+            st.plotly_chart(fig_gauge, use_container_width=True)
 
-            # 1. Main Price Plot
-            if chart_style == "Candlestick":
-                fig.add_trace(go.Candlestick(
-                    x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
-                    name=f"{selected_asset} OHLC",
-                    increasing_line_color="#3fb950", decreasing_line_color="#f85149"
-                ), row=1, col=1)
-            elif chart_style == "Line Chart (Close)":
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["c"],
-                    mode="lines",
-                    name=f"{selected_asset} Price",
-                    line=dict(color="#58a6ff", width=2),
-                    fill="tozeroy",
-                    fillcolor="rgba(88, 166, 255, 0.05)"
-                ), row=1, col=1)
+        with health_col2:
+            st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px; text-align: center;'>Capital Distribution</div>", unsafe_allow_html=True)
+            opt_exposure = sum(abs(float(p["market_value"])) for p in positions)
+            free_cash = max(0.0, cash - opt_exposure)
+            
+            alloc_labels = ["Free Cash", "Options Margin", "Buffer"]
+            alloc_values = [free_cash, opt_exposure, max(0.0, equity - free_cash - opt_exposure)]
+            alloc_colors = ["#238636", "#1f6feb", "#8b949e"]
+
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=alloc_labels,
+                values=alloc_values,
+                hole=0.6,
+                marker=dict(colors=alloc_colors, line=dict(color="#0d1117", width=2)),
+                textinfo="label+percent",
+                insidetextorientation="radial"
+            )])
+            fig_pie.update_layout(
+                height=300,
+                margin=dict(t=10, b=10, l=20, r=20),
+                paper_bgcolor="#0d1117",
+                plot_bgcolor="#0d1117",
+                font=dict(color="#e6edf3"),
+                showlegend=True,
+                legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center")
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Open Positions & Risk Breakdowns ────────────────────────
+        pos_col, risk_col = st.columns([1.5, 1])
+
+        with pos_col:
+            st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Open Option Contracts</div>", unsafe_allow_html=True)
+            if positions:
+                df_pos = pd.DataFrame(positions)
+                display_df = pd.DataFrame({
+                    "Contract": df_pos["symbol"],
+                    "Qty": df_pos["qty"].astype(float).map("{:+.1f}".format),
+                    "Entry": df_pos["avg_entry_price"].astype(float).map("${:,.2f}".format),
+                    "Market Value": df_pos["market_value"].astype(float).map("${:,.2f}".format),
+                    "P&L": df_pos["unrealized_pl"].astype(float).map("${:+,.2f}".format),
+                })
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
             else:
-                fig.add_trace(go.Ohlc(
-                    x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
-                    name=f"{selected_asset} OHLC",
-                    increasing_line_color="#3fb950", decreasing_line_color="#f85149"
-                ), row=1, col=1)
+                st.info("No open positions. Orchestrator scans and enters orders at session triggers.")
 
-            # 2. Overlays
-            if "20 EMA" in indicator_selection:
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["ema20"], name="20 EMA (Fast)",
-                    line=dict(color="#58a6ff", width=1.5)
-                ), row=1, col=1)
-            if "50 EMA" in indicator_selection:
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["ema50"], name="50 EMA (Slow)",
-                    line=dict(color="#d29922", width=1.5)
-                ), row=1, col=1)
-            if "Bollinger Bands" in indicator_selection:
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["bb_upper"], name="BB Upper (2σ)",
-                    line=dict(color="#bc8cff", width=1, dash="dot")
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["bb_lower"], name="BB Lower (2σ)",
-                    line=dict(color="#bc8cff", width=1, dash="dot"),
-                    fill="tonexty", fillcolor="rgba(188, 140, 255, 0.04)"
-                ), row=1, col=1)
+        with risk_col:
+            st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Risk Circuit Breakers</div>", unsafe_allow_html=True)
+            
+            daily_loss_limit = 2000.0
+            daily_pnl = total_pnl
+            loss_remaining = max(0.0, daily_loss_limit + daily_pnl)
 
-            # 3. Active Option Strike Level Lines
-            for p in positions:
-                sym = p["symbol"]
-                if selected_asset in sym:
-                    try:
-                        strike_val = float(sym[-8:]) / 1000.0
-                        opt_type = "Put" if "P" in sym else "Call"
-                        fig.add_hline(
-                            y=strike_val, line_dash="dash", line_color="#39d353",
-                            annotation_text=f"Active {opt_type} Strike: ${strike_val:.0f}",
-                            row=1, col=1
-                        )
-                    except Exception:
-                        pass
+            options_positions = [p for p in positions if "option" in str(p.get("asset_class", "")).lower()]
+            opt_exposure = sum(abs(float(p["market_value"])) for p in options_positions)
+            opt_pct = (opt_exposure / equity) * 100 if equity > 0 else 0.0
 
-            current_row = 2
-            # 4. Volume Subplot
-            if has_volume:
-                v_colors = ["#3fb950" if c >= o else "#f85149" for c, o in zip(df["c"], df["o"])]
-                fig.add_trace(go.Bar(
-                    x=df["t"], y=df["v"], name="Volume",
-                    marker_color=v_colors, opacity=0.75
-                ), row=current_row, col=1)
-                fig.update_yaxes(title_text="Volume", gridcolor="#21262d", row=current_row, col=1)
-                current_row += 1
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #3fb950; margin-bottom: 10px; padding: 12px 16px;">
+                <div class="metric-label" style="font-size: 11px;">Daily Loss Buffer</div>
+                <div class="metric-value" style="font-size: 20px;">${loss_remaining:,.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            # 5. RSI Subplot
-            if has_rsi:
-                fig.add_trace(go.Scatter(
-                    x=df["t"], y=df["rsi"], name="RSI (14)",
-                    line=dict(color="#f0883e", width=1.5)
-                ), row=current_row, col=1)
-                fig.add_hline(y=70, line_dash="dot", line_color="#f85149", row=current_row, col=1)
-                fig.add_hline(y=30, line_dash="dot", line_color="#3fb950", row=current_row, col=1)
-                fig.update_yaxes(title_text="RSI", range=[0, 100], gridcolor="#21262d", row=current_row, col=1)
+            exposure_color = "#3fb950" if opt_pct <= 25.0 else "#d29922"
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid {exposure_color}; margin-bottom: 10px; padding: 12px 16px;">
+                <div class="metric-label" style="font-size: 11px;">Options Exposure Cap</div>
+                <div class="metric-value" style="color: {exposure_color}; font-size: 20px;">{opt_pct:.1f}% / 30.0%</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            # Unified Layout
-            fig.update_layout(
-                title=dict(
-                    text=f"{selected_asset} Analysis Terminal",
-                    font=dict(color="#ffffff", size=18)
-                ),
-                height=650,
-                margin=dict(t=60, b=20, l=20, r=20),
-                paper_bgcolor="#161b22",
-                plot_bgcolor="#161b22",
-                xaxis=dict(gridcolor="#21262d", rangeslider=dict(visible=False)),
-                yaxis=dict(gridcolor="#21262d", title="Asset Price ($ USD)"),
-                legend=dict(orientation="h", y=1.06, x=0.5, xanchor="center", font=dict(color="#8b949e")),
-                hovermode="x unified",
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #f85149; padding: 12px 16px;">
+                <div class="metric-label" style="font-size: 11px;">VIX Overdrive Threshold</div>
+                <div class="metric-value" style="font-size: 20px;">VIX &ge; 35.0</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with tab_charts:
+        # ── Section 2: Market Intelligence & Analytics ───────────────
+        st.markdown("<div style='color: #d29922; font-size: 16px; font-weight: 600; margin-bottom: 15px;'>Market Price Action & Filters</div>", unsafe_allow_html=True)
+        
+        # Sleek inline filters
+        f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
+        
+        with f_col1:
+            selected_asset = st.selectbox(
+                "Asset",
+                options=["SPY", "QQQ", "IWM", "GLD", "SLV", "PLTR", "SOFI", "NVDA", "TSLA", "VIXY"],
+                index=0
             )
-            st.plotly_chart(fig, use_container_width=True)
+        with f_col2:
+            timeframe_choice = st.selectbox(
+                "Timeframe",
+                options=["1Day", "1Hour", "15Min", "5Min"],
+                index=0
+            )
+        with f_col3:
+            chart_style = st.selectbox(
+                "Style",
+                options=["Candlestick", "Line Chart", "OHLC Bars"],
+                index=0
+            )
+        with f_col4:
+            history_bars = st.slider(
+                "Bars",
+                min_value=30, max_value=250, value=90, step=10
+            )
+        with f_col5:
+            indicator_selection = st.multiselect(
+                "Indicators",
+                options=["20 EMA", "50 EMA", "Bollinger Bands", "Volume", "RSI (14)"],
+                default=["20 EMA", "50 EMA", "Volume"]
+            )
 
-        else:
-            st.info(f"Historical market data is being retrieved for {selected_asset}...")
-    except Exception as e:
-        st.warning(f"Unable to load chart stream for {selected_asset}: {e}")
+        # Fetch Data and Render Plotly Graph
+        try:
+            bars = client.get_bars(selected_asset, timeframe=timeframe_choice, limit=history_bars)
+            
+            if bars and len(bars) >= 5:
+                df = pd.DataFrame(bars)
+                df["t"] = pd.to_datetime(df["t"])
+                df = df.sort_values("t").reset_index(drop=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+                # Compute Indicators
+                if "20 EMA" in indicator_selection:
+                    df["ema20"] = df["c"].ewm(span=20, adjust=False).mean()
+                if "50 EMA" in indicator_selection:
+                    df["ema50"] = df["c"].ewm(span=50, adjust=False).mean()
+                if "Bollinger Bands" in indicator_selection:
+                    df["sma20"] = df["c"].rolling(window=20).mean()
+                    df["std20"] = df["c"].rolling(window=20).std()
+                    df["bb_upper"] = df["sma20"] + (df["std20"] * 2)
+                    df["bb_lower"] = df["sma20"] - (df["std20"] * 2)
+                if "RSI (14)" in indicator_selection:
+                    delta = df["c"].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss.replace(0, np.nan)
+                    df["rsi"] = 100 - (100 / (1 + rs))
 
-    # ── Section 3: Risk & Strategy Engines ───────────────────────
-    st.markdown("""
-    <div style="padding: 10px 0; border-bottom: 1px solid #30363d; margin-bottom: 20px;">
-        <h3 style="color: #bc8cff; margin: 0;">3. Strategy Payoff Simulator & Risk Controls</h3>
-    </div>
-    """, unsafe_allow_html=True)
+                # Determine Subplot Structure
+                has_volume = "Volume" in indicator_selection
+                has_rsi = "RSI (14)" in indicator_selection
 
-    strat_col, risk_col = st.columns([1.5, 1])
+                rows = 1 + (1 if has_volume else 0) + (1 if has_rsi else 0)
+                row_heights = [0.65] if rows == 1 else ([0.65, 0.20] if rows == 2 else [0.55, 0.25, 0.20])
 
-    with strat_col:
-        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Options Expiration Payoff Curve</div>", unsafe_allow_html=True)
+                fig = make_subplots(
+                    rows=rows, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.03,
+                    row_heights=row_heights
+                )
+
+                # 1. Main Price Plot
+                if chart_style == "Candlestick":
+                    fig.add_trace(go.Candlestick(
+                        x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
+                        name=f"{selected_asset}",
+                        increasing_line_color="#3fb950", decreasing_line_color="#f85149"
+                    ), row=1, col=1)
+                elif chart_style == "Line Chart":
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["c"],
+                        mode="lines",
+                        name=f"{selected_asset}",
+                        line=dict(color="#58a6ff", width=2),
+                        fill="tozeroy",
+                        fillcolor="rgba(88, 166, 255, 0.05)"
+                    ), row=1, col=1)
+                else:
+                    fig.add_trace(go.Ohlc(
+                        x=df["t"], open=df["o"], high=df["h"], low=df["l"], close=df["c"],
+                        name=f"{selected_asset}",
+                        increasing_line_color="#3fb950", decreasing_line_color="#f85149"
+                    ), row=1, col=1)
+
+                # 2. Overlays
+                if "20 EMA" in indicator_selection:
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["ema20"], name="20 EMA",
+                        line=dict(color="#58a6ff", width=1.5)
+                    ), row=1, col=1)
+                if "50 EMA" in indicator_selection:
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["ema50"], name="50 EMA",
+                        line=dict(color="#d29922", width=1.5)
+                    ), row=1, col=1)
+                if "Bollinger Bands" in indicator_selection:
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["bb_upper"], name="BB Upper",
+                        line=dict(color="#bc8cff", width=1, dash="dot")
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["bb_lower"], name="BB Lower",
+                        line=dict(color="#bc8cff", width=1, dash="dot"),
+                        fill="tonexty", fillcolor="rgba(188, 140, 255, 0.04)"
+                    ), row=1, col=1)
+
+                # 3. Active Option Strike Level Lines
+                for p in positions:
+                    sym = p["symbol"]
+                    if selected_asset in sym:
+                        try:
+                            strike_val = float(sym[-8:]) / 1000.0
+                            opt_type = "Put" if "P" in sym else "Call"
+                            fig.add_hline(
+                                y=strike_val, line_dash="dash", line_color="#39d353",
+                                annotation_text=f"Active {opt_type}: ${strike_val:.0f}",
+                                row=1, col=1
+                            )
+                        except Exception:
+                            pass
+
+                current_row = 2
+                # 4. Volume Subplot
+                if has_volume:
+                    v_colors = ["#3fb950" if c >= o else "#f85149" for c, o in zip(df["c"], df["o"])]
+                    fig.add_trace(go.Bar(
+                        x=df["t"], y=df["v"], name="Volume",
+                        marker_color=v_colors, opacity=0.75
+                    ), row=current_row, col=1)
+                    fig.update_yaxes(gridcolor="#21262d", row=current_row, col=1)
+                    current_row += 1
+
+                # 5. RSI Subplot
+                if has_rsi:
+                    fig.add_trace(go.Scatter(
+                        x=df["t"], y=df["rsi"], name="RSI",
+                        line=dict(color="#f0883e", width=1.5)
+                    ), row=current_row, col=1)
+                    fig.add_hline(y=70, line_dash="dot", line_color="#f85149", row=current_row, col=1)
+                    fig.add_hline(y=30, line_dash="dot", line_color="#3fb950", row=current_row, col=1)
+                    fig.update_yaxes(range=[0, 100], gridcolor="#21262d", row=current_row, col=1)
+
+                # Unified Layout
+                fig.update_layout(
+                    height=580,
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    paper_bgcolor="#161b22",
+                    plot_bgcolor="#161b22",
+                    xaxis=dict(gridcolor="#21262d", rangeslider=dict(visible=False)),
+                    yaxis=dict(gridcolor="#21262d"),
+                    legend=dict(orientation="h", y=1.03, x=0.5, xanchor="center", font=dict(color="#8b949e")),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.info(f"Historical market data is being retrieved for {selected_asset}...")
+        except Exception as e:
+            st.warning(f"Unable to load chart stream for {selected_asset}: {e}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #bc8cff; font-size: 16px; font-weight: 600; margin-bottom: 10px;'>Options Expiration Simulator</div>", unsafe_allow_html=True)
         
         has_options = any("P" in p["symbol"] or "C" in p["symbol"] for p in positions)
         if positions and has_options:
@@ -560,8 +580,8 @@ if data_loaded:
                     fig_payoff.add_vline(x=breakeven, line_dash="dot", line_color="#f85149", annotation_text=f"BE ${breakeven:.2f}")
 
             fig_payoff.update_layout(
-                height=380,
-                margin=dict(t=30, b=20, l=20, r=20),
+                height=350,
+                margin=dict(t=20, b=20, l=20, r=20),
                 paper_bgcolor="#161b22",
                 plot_bgcolor="#161b22",
                 xaxis=dict(gridcolor="#21262d", title="Underlying Spot Price ($ USD)"),
@@ -571,51 +591,7 @@ if data_loaded:
             )
             st.plotly_chart(fig_payoff, use_container_width=True)
         else:
-            st.info("No active options positions. Payoff curve will display when orders are filled.")
-
-    with risk_col:
-        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Active Circuit Breakers</div>", unsafe_allow_html=True)
-        
-        daily_loss_limit = 2000.0
-        daily_pnl = total_pnl
-        loss_remaining = max(0.0, daily_loss_limit + daily_pnl)
-
-        options_positions = [p for p in positions if "option" in str(p.get("asset_class", "")).lower()]
-        opt_exposure = sum(abs(float(p["market_value"])) for p in options_positions)
-        opt_pct = (opt_exposure / equity) * 100 if equity > 0 else 0.0
-
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #3fb950; margin-bottom: 15px;">
-            <div class="metric-label">Daily Loss Buffer</div>
-            <div class="metric-value">${loss_remaining:,.2f}</div>
-            <div style="font-size: 13px; color: #8b949e;">Limit: -$2,000.00 (-2.0%)</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        exposure_color = "#3fb950" if opt_pct <= 25.0 else "#d29922"
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid {exposure_color}; margin-bottom: 15px;">
-            <div class="metric-label">Options Exposure Cap</div>
-            <div class="metric-value" style="color: {exposure_color};">{opt_pct:.1f}% / 30.0%</div>
-            <div style="font-size: 13px; color: #8b949e;">Total Margin Utilization</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #1f6feb; margin-bottom: 15px;">
-            <div class="metric-label">Single Position Cap</div>
-            <div class="metric-value">${equity * 0.05:,.0f}</div>
-            <div style="font-size: 13px; color: #8b949e;">Max 5.0% of Portfolio Notional</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"""
-        <div class="metric-card" style="border-left: 4px solid #f85149;">
-            <div class="metric-label">VIX Overdrive Threshold</div>
-            <div class="metric-value">VIX &ge; 35.0</div>
-            <div style="font-size: 13px; color: #8b949e;">System-wide Trade Halt</div>
-        </div>
-        """, unsafe_allow_html=True)
+            st.info("No active options positions to simulate.")
 
 # ── Footer ─────────────────────────────────────────────────────
 st.divider()

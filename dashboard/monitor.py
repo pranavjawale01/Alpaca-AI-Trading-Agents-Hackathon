@@ -15,13 +15,31 @@ Run: streamlit run dashboard/monitor.py
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
 import time
 from datetime import datetime, timezone
+
+# Add project root to sys.path so 'core' and 'agents' packages can be imported
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from dotenv import load_dotenv
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Force UTF-8 output on Windows
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import plotly.graph_objects as go
 import streamlit as st
 
-# Lazy import — avoids breaking import if .env not set up yet
+# Lazy import
 def _get_client():
     from core.alpaca_client import AlpacaClient
     return AlpacaClient()

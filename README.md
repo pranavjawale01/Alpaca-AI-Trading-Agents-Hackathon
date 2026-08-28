@@ -1,5 +1,5 @@
-# ⚡ Cache Me — Autonomous Options Alpha Agents
-> **Alpaca AI Trading Agents Hackathon 2026** | **Team:** Cache Me | **Platform:** lablab.ai × Alpaca
+# Cache Me If You Can — Autonomous Options Alpha Agents
+> **Alpaca AI Trading Agents Hackathon 2026** | **Team:** Cache Me If You Can | **Platform:** lablab.ai x Alpaca
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B%20%7C%203.12-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Alpaca API](https://img.shields.io/badge/Alpaca-Paper%20Trading%20API-FFD100?logo=alpaca&logoColor=black)](https://alpaca.markets)
@@ -9,91 +9,91 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
-**Cache Me** is an autonomous multi-agent AI options trading system built on Alpaca's developer platform. It combines real-time market regime detection, mathematical options pricing (Black-Scholes & Greeks), LLM reasoning via Alpaca's Model Context Protocol (MCP) server & Featherless AI, and rigorous risk guardrails to generate consistent, risk-adjusted P&L on a dedicated **\$100,000** paper account.
+**Cache Me If You Can** is an autonomous multi-agent AI options trading system built on Alpaca's developer platform. It combines real-time market regime detection, mathematical options pricing (Black-Scholes and Greeks), LLM reasoning via Alpaca's Model Context Protocol (MCP) server and Featherless AI, and rigorous risk guardrails to generate consistent, risk-adjusted P&L on a dedicated **$100,000** paper account.
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```
-                                 ┌────────────────────────┐
-                                 │   Market Data Stream   │
-                                 │ (Alpaca Data API / VIX)│
-                                 └───────────┬────────────┘
-                                             │
-                                             ▼
-                               ┌───────────────────────────┐
-                               │     Master Orchestrator   │
-                               │  (VIX Regime Detection)   │
-                               └─────────────┬─────────────┘
-                                             │
-             ┌────────────────┬──────────────┴───────────────┬────────────────┐
-             │                │                              │                │
-             ▼                ▼                              ▼                ▼
-     ┌───────────────┐ ┌───────────────┐            ┌─────────────────┐ ┌───────────┐
+                                 +------------------------+
+                                 |   Market Data Stream   |
+                                 | (Alpaca Data API / VIX)|
+                                 +-----------+------------+
+                                             |
+                                             v
+                               +---------------------------+
+                               |     Master Orchestrator   |
+                               |  (VIX Regime Detection)   |
+                               +-------------+-------------+
+                                             |
+             +----------------+--------------+---------------+----------------+
+             |                |                              |                |
+             v                v                              v                v
+     +---------------+ +---------------+            +-----------------+ +-----------+
      │ ThetaCollector│ │ IVCrushAgent  │            │  MomoBreakout   │ │HedgeAgent │
      │  (CSP Income) │ │ (Straddles)   │            │   (OTM Calls)   │ │(SPY Puts) │
-     └───────┬───────┘ └───────┬───────┘            └────────┬────────┘ └─────┬─────┘
-             │                 │                             │                │
-             └─────────────────┴──────────────┬──────────────┴────────────────┘
-                                              │
-                                              ▼
-                               ┌─────────────────────────────┐
-                               │     Risk Manager Engine     │
-                               │   (6 Hard Circuit Breakers) │
-                               └──────────────┬──────────────┘
-                                              │ [Approved Orders]
-                                              ▼
-                               ┌─────────────────────────────┐
-                               │   Execution & Monitoring    │
-                               │  ┌────────────────────────┐ │
-                               │  │   Alpaca Trading API   │ │
-                               │  │   Alpaca MCP Server    │ │
-                               │  │   Alpaca CLI Runner    │ │
-                               │  │   Streamlit Dashboard  │ │
-                               │  └────────────────────────┘ │
-                               └─────────────────────────────┘
+     +-------+-------+ +-------+-------+            +--------+--------+ +-----+-----+
+             |                 |                             |                |
+             +-----------------+--------------+--------------+----------------+
+                                              |
+                                              v
+                               +-----------------------------+
+                               |     Risk Manager Engine     |
+                               |   (6 Hard Circuit Breakers) |
+                               +--------------+--------------+
+                                              | [Approved Orders]
+                                              v
+                               +-----------------------------+
+                               |   Execution & Monitoring    |
+                               |  +------------------------+ |
+                               |  |   Alpaca Trading API   | |
+                               |  |   Alpaca MCP Server    | |
+                               |  |   Alpaca CLI Runner    | |
+                               |  |   Streamlit Dashboard  | |
+                               |  +------------------------+ |
+                               +-----------------------------+
 ```
 
 ---
 
-## 🎯 Multi-Agent Strategy Portfolio
+## Multi-Agent Strategy Portfolio
 
 | Agent | Strategy & Mechanics | Target Delta | DTE Range | Exit Conditions |
 | :--- | :--- | :---: | :---: | :--- |
-| **Theta Collector** | Sells cash-secured puts on liquid ETFs and high-volume stocks (`SPY`, `QQQ`, `IWM`, `GLD`, `PLTR`, `SOFI`) to collect time decay premium. | ~0.20 | 28–45 Days | 50% max profit OR 21 DTE time stop |
-| **IV Crush Agent** | Sells ATM straddles 1–3 days prior to company earnings announcements to capture rapid volatility collapse. | 0.00 | 7–14 Days | 40% profit target OR 1 day post-earnings |
-| **Momo Breakout** | Buys cheap OTM calls on explosive momentum breakouts confirmed by 20/50 EMA bullish cross + 2x volume surge. | ~0.30 | 28–45 Days | +100% gain target OR -50% premium stop loss |
-| **Hedge Agent** | Automatically purchases protective SPY puts when aggregate portfolio delta exceeds +30 or VIX spikes above 22. | -0.20 | 28–45 Days | Closed when market regime normalizes |
+| **Theta Collector** | Sells cash-secured puts on liquid ETFs and high-volume stocks (`SPY`, `QQQ`, `IWM`, `GLD`, `PLTR`, `SOFI`) to collect time decay premium. | ~0.20 | 28-45 Days | 50% max profit OR 21 DTE time stop |
+| **IV Crush Agent** | Sells ATM straddles 1-3 days prior to company earnings announcements to capture rapid volatility collapse. | 0.00 | 7-14 Days | 40% profit target OR 1 day post-earnings |
+| **Momo Breakout** | Buys cheap OTM calls on explosive momentum breakouts confirmed by 20/50 EMA bullish cross + 2x volume surge. | ~0.30 | 28-45 Days | +100% gain target OR -50% premium stop loss |
+| **Hedge Agent** | Automatically purchases protective SPY puts when aggregate portfolio delta exceeds +30 or VIX spikes above 22. | -0.20 | 28-45 Days | Closed when market regime normalizes |
 
 ---
 
-## 🛡️ 6-Gate Risk Management Framework
+## 6-Gate Risk Management Framework
 
-Every single trade must pass through the stateful **Risk Manager** ([`core/risk_manager.py`](core/risk_manager.py)) prior to execution:
+Every single trade must pass through the stateful **Risk Manager** (`core/risk_manager.py`) prior to execution:
 
-1. **☠️ VIX Kill Switch:** Halts all new open orders whenever VIX $\ge 35.0$.
-2. **🛑 Daily Loss Limit:** Freezes new trades if daily portfolio drawdown reaches $-2\%$ ($-\$2,000$).
-3. **🎯 Single Position Cap:** Maximum notional/margin exposure per trade is capped at $\le 5\%$ of equity ($\le \$5,000$).
-4. **📊 Total Options Exposure:** Aggregated options positions are limited to $\le 30\%$ of total equity ($\le \$30,000$).
-5. **⚖️ Delta Neutrality Bounds:** Portfolio net delta is continuously enforced within $[-50.0, +50.0]$.
-6. **⏳ Binary Event Cooldown:** Enforces a 2-hour trading blackout before and after high-impact market events.
-
----
-
-## 🔌 Alpaca Platform & Partner Integration
-
-- **⚡ Alpaca Trading API (`alpaca-py 0.44.0`):** Full-featured integration for account queries, stock/options order submission, and position monitoring.
-- **🔌 Model Context Protocol (MCP) Bridge ([`core/mcp_bridge.py`](core/mcp_bridge.py)):** Connects AI agents directly with Alpaca tools using structured function calling.
-- **⌨️ Alpaca CLI Automation ([`cli/run_agent.sh`](cli/run_agent.sh)):** Lightweight CLI shell script for automated sessions, structured JSON output, and cron jobs.
-- **🧠 Featherless AI LLM Inference:** Serverless open-source model inference (`meta-llama/Llama-3.1-8B-Instruct`) for earnings analysis and unstructured market reasoning.
-- **📈 Real-Time Market Data:** Alpaca Historical & Latest Data Clients for multi-timeframe OHLCV bars, quotes, and option contract chains.
+1. **VIX Kill Switch:** Halts all new open orders whenever VIX >= 35.0.
+2. **Daily Loss Limit:** Freezes new trades if daily portfolio drawdown reaches -2% (-$2,000).
+3. **Single Position Cap:** Maximum notional/margin exposure per trade is capped at <= 5% of equity (<=$5,000).
+4. **Total Options Exposure:** Aggregated options positions are limited to <= 30% of total equity (<=$30,000).
+5. **Delta Neutrality Bounds:** Portfolio net delta is continuously enforced within [-50.0, +50.0].
+6. **Binary Event Cooldown:** Enforces a 2-hour trading blackout before and after high-impact market events.
 
 ---
 
-## 🚀 Quick Start
+## Alpaca Platform & Partner Integration
+
+- **Alpaca Trading API (`alpaca-py 0.44.0`):** Full-featured integration for account queries, stock/options order submission, and position monitoring.
+- **Model Context Protocol (MCP) Bridge (`core/mcp_bridge.py`):** Connects AI agents directly with Alpaca tools using structured function calling.
+- **Alpaca CLI Automation (`cli/run_agent.sh`):** Lightweight CLI shell script for automated sessions, structured JSON output, and cron jobs.
+- **Featherless AI LLM Inference:** Serverless open-source model inference (`meta-llama/Llama-3.1-8B-Instruct`) for earnings analysis and unstructured market reasoning.
+- **Real-Time Market Data:** Alpaca Historical and Latest Data Clients for multi-timeframe OHLCV bars, quotes, and option contract chains.
+
+---
+
+## Quick Start
 
 ### 1. Clone & Install Dependencies
 ```bash
@@ -135,7 +135,7 @@ python -X utf8 main.py schedule
 ```bash
 streamlit run dashboard/monitor.py
 ```
-> Open your browser at **[http://localhost:8501](http://localhost:8501)** to monitor live equity, P&L gauge, open option positions, and risk metrics.
+> Open your browser at **http://localhost:8501** to monitor live equity, P&L gauge, open option positions, and risk metrics.
 
 #### Run via Alpaca CLI Runner
 ```bash
@@ -145,7 +145,7 @@ bash cli/run_agent.sh run
 
 ---
 
-## 🧪 Automated Testing
+## Automated Testing
 
 The project includes unit tests for mathematical options pricing, Greeks, and all risk gates:
 
@@ -176,7 +176,7 @@ tests/test_risk_manager.py::test_delta_within_range_passes PASSED
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 Alpaca-AI-Trading-Agents-Hackathon/
@@ -209,16 +209,16 @@ Alpaca-AI-Trading-Agents-Hackathon/
 
 ---
 
-## 🏆 Hackathon Details
+## Hackathon Details
 
-- **Event:** Alpaca AI Trading Agents Hackathon (lablab.ai × Alpaca)
+- **Event:** Alpaca AI Trading Agents Hackathon (lablab.ai x Alpaca)
 - **Dates:** August 28 – September 4, 2026
-- **Team Name:** Cache Me
+- **Team Name:** Cache Me If You Can
 - **Dedicated Account ID:** `9e62f22b-a0cb-49c3-99d0-10a1fcd2c9a3`
-- **Initial Paper Balance:** \$100,000.00 USD
+- **Initial Paper Balance:** $100,000.00 USD
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

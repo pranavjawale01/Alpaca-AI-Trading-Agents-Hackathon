@@ -93,28 +93,28 @@ _STRATEGY_PROMPTS = {
         "Market context:\n{context}\n\n"
         "Should we enter a momentum call buy trade? "
         "Respond ONLY with valid JSON: "
-        '{"action": "buy" | "hold", "confidence": 0.0-1.0, "reasoning": "one concise sentence"}'
+        '{{"action": "buy", "confidence": 0.85, "reasoning": "one concise sentence"}}'
     ),
     "theta_put": (
         "Evaluate this setup for selling a cash-secured put to collect theta premium.\n"
         "Market context:\n{context}\n\n"
         "Should we sell this cash-secured put? "
         "Respond ONLY with valid JSON: "
-        '{"action": "sell" | "hold", "confidence": 0.0-1.0, "reasoning": "one concise sentence"}'
+        '{{"action": "sell", "confidence": 0.85, "reasoning": "one concise sentence"}}'
     ),
     "iv_crush_straddle": (
         "Evaluate this earnings IV-crush straddle sell setup.\n"
         "Market context:\n{context}\n\n"
         "Should we sell this ATM straddle to profit from post-earnings IV collapse? "
         "Respond ONLY with valid JSON: "
-        '{"action": "sell" | "hold", "confidence": 0.0-1.0, "reasoning": "one concise sentence"}'
+        '{{"action": "sell", "confidence": 0.85, "reasoning": "one concise sentence"}}'
     ),
     "general": (
         "Evaluate this potential trade.\n"
         "Market context:\n{context}\n\n"
         "What action is best? "
         "Respond ONLY with valid JSON: "
-        '{"action": "buy" | "sell" | "hold", "confidence": 0.0-1.0, "reasoning": "one concise sentence"}'
+        '{{"action": "buy", "confidence": 0.85, "reasoning": "one concise sentence"}}'
     ),
 }
 

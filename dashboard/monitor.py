@@ -42,6 +42,15 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+# Automatically bridge Streamlit Cloud Secrets into os.environ
+try:
+    if hasattr(st, "secrets"):
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+except Exception:
+    pass
+
 import config
 from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
@@ -200,7 +209,7 @@ with st.sidebar:
     st.markdown("### Resources & Links")
     st.markdown("- [Alpaca Paper Console](https://app.alpaca.markets/paper/dashboard/overview)")
     st.markdown("- [Hackathon Portal](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)")
-    st.markdown("- [GitHub Codebase](https://github.com/Pranav1173/Alpaca-AI-Trading-Agents-Hackathon)")
+    st.markdown("- [GitHub Codebase](https://github.com/pranavjawale01/Alpaca-AI-Trading-Agents-Hackathon)")
     st.divider()
     st.caption("Team: Cache Me If You Can")
     st.caption("Alpaca AI Trading Agents Hackathon 2026")

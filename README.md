@@ -169,7 +169,7 @@ Every trade must pass through the stateful **Risk Manager** (`core/risk_manager.
 
 ### 1. Clone & Install Dependencies
 ```bash
-git clone https://github.com/Pranav1173/Alpaca-AI-Trading-Agents-Hackathon.git
+git clone https://github.com/pranavjawale01/Alpaca-AI-Trading-Agents-Hackathon.git
 cd Alpaca-AI-Trading-Agents-Hackathon
 pip install -r requirements.txt
 ```

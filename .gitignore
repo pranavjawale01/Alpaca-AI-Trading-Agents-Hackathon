@@ -30,7 +30,7 @@ logs/
 *.sqlite
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
 # Testing
 .pytest_cache/

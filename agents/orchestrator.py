@@ -30,6 +30,10 @@ from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
 from core.mcp_bridge import MCPBridge
 from core.risk_manager import RiskManager
+from core.llm_council import LLMCouncil
+from core.trade_journal import TradeJournal
+from core.kelly_sizer import KellySizer
+from core.smart_executor import SmartExecutor
 from agents.theta_collector import ThetaCollectorAgent
 from agents.iv_crush_agent import IVCrushAgent
 from agents.momo_breakout import MomoBreakoutAgent
@@ -70,11 +74,37 @@ class Orchestrator:
         self.rm = RiskManager()
         self.mcp = MCPBridge(self.client)
 
-        # Sub-agents
-        self.theta = ThetaCollectorAgent(self.client, self.md, self.rm)
-        self.iv_crush = IVCrushAgent(self.client, self.md, self.rm)
-        self.momo = MomoBreakoutAgent(self.client, self.md, self.rm)
-        self.hedge = HedgeAgent(self.client, self.md, self.rm)
+        # LLM Council — 3-model voting ensemble for signal quality filtering
+        self.council = LLMCouncil()
+
+        # ── Pro Trading Systems ──────────────────────────────────────────
+        # Trade journal: persistent SQLite log for every entry/exit
+        self.journal = TradeJournal()
+
+        # Kelly sizer: reads journal stats → computes optimal position sizes
+        self.kelly = KellySizer(self.journal)
+
+        # Smart executor: mid-price limit orders → avoids paying full spread
+        self.executor = SmartExecutor(self.client)
+        # ────────────────────────────────────────────────────────────────
+
+        # Sub-agents (all pro systems + council injected)
+        self.theta = ThetaCollectorAgent(
+            self.client, self.md, self.rm,
+            council=self.council, kelly_sizer=self.kelly,
+            smart_executor=self.executor, journal=self.journal,
+        )
+        self.iv_crush = IVCrushAgent(
+            self.client, self.md, self.rm,
+            council=self.council, kelly_sizer=self.kelly,
+            smart_executor=self.executor, journal=self.journal,
+        )
+        self.momo = MomoBreakoutAgent(
+            self.client, self.md, self.rm,
+            council=self.council, kelly_sizer=self.kelly,
+            smart_executor=self.executor, journal=self.journal,
+        )
+        self.hedge = HedgeAgent(self.client, self.md, self.rm)  # hedge never filtered
 
         self.session_log: list[dict] = []
         console.print("[bold green]All agents initialised successfully[/bold green]")
@@ -125,6 +155,10 @@ class Orchestrator:
         session_summary = self._build_session_summary(session_start, regime, all_actions)
         self.session_log.append(session_summary)
         self._print_session_summary(session_summary)
+
+        # Step 5: Print cumulative performance & Kelly edges (all-time from journal)
+        self.journal.print_performance_table()
+        self.kelly.print_strategy_edges(self.rm.equity)
 
         return session_summary
 
@@ -224,6 +258,15 @@ class Orchestrator:
         account = self.client.get_account()
         risk_summary = self.rm.summary()
 
+        # Tally council statistics from all votes this session
+        council_votes = []
+        if self.council and self.council._available:
+            # Collect from in-memory vote history (future: persist per session)
+            pass  # votes are logged per-trade; aggregate counts come from actions
+
+        vetoed = sum(1 for a in actions if a.get("action") == "council_vetoed")
+        executed = len([a for a in actions if a.get("action") != "council_vetoed"])
+
         return {
             "timestamp": start.isoformat(),
             "regime": regime,
@@ -235,6 +278,13 @@ class Orchestrator:
             "options_exposure_pct": risk_summary["options_exposure_pct"],
             "actions_taken": len(actions),
             "actions": actions,
+            "council_stats": {
+                "enabled": self.council.enabled if self.council else False,
+                "models": self.council.models if self.council else [],
+                "threshold": self.council.threshold if self.council else None,
+                "trades_vetoed": vetoed,
+                "trades_executed": executed,
+            },
         }
 
     def _print_session_summary(self, summary: dict) -> None:
@@ -253,5 +303,19 @@ class Orchestrator:
         table.add_row("Portfolio Delta", f"{summary['portfolio_delta']:.1f}")
         table.add_row("Options Exposure", f"{summary['options_exposure_pct']:.1f}%")
         table.add_row("Actions Taken", str(summary["actions_taken"]))
+
+        # Council stats
+        cs = summary.get("council_stats", {})
+        if cs.get("enabled"):
+            n_models = len(cs.get("models", []))
+            table.add_row("─" * 20, "─" * 20)
+            table.add_row(
+                "Council Models",
+                f"[bold]{n_models} models[/bold] | threshold={cs.get('threshold', '?')}"
+            )
+            table.add_row("Trades Executed", f"[green]{cs.get('trades_executed', '?')}[/green]")
+            table.add_row("Trades Vetoed", f"[yellow]{cs.get('trades_vetoed', 0)}[/yellow]")
+        else:
+            table.add_row("LLM Council", "[dim]disabled (rules-only)[/dim]")
 
         console.print(table)

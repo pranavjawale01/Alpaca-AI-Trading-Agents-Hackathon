@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 
@@ -31,7 +31,14 @@ from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
 from core.options_pricer import greeks, iv_rank
 from core.risk_manager import RiskManager, RiskViolation
+from core.signal_enhancer import SignalEnhancer
 import config
+
+if TYPE_CHECKING:
+    from core.llm_council import LLMCouncil
+    from core.kelly_sizer import KellySizer
+    from core.smart_executor import SmartExecutor
+    from core.trade_journal import TradeJournal
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -51,6 +58,12 @@ class ThetaCollectorAgent:
     """
     Sells cash-secured puts on high-quality ETFs to collect theta decay.
     This is the most reliable P&L generator in the portfolio.
+
+    Pro improvements:
+      1. LLM Council: vote gate for premium-selling signal quality
+      2. Kelly Criterion: size puts to win-rate-adjusted edge
+      3. SmartExecutor: sell at mid-price (receive more than bid)
+      4. TradeJournal: persistent logging for Kelly feedback loop
     """
 
     def __init__(
@@ -58,12 +71,20 @@ class ThetaCollectorAgent:
         client: AlpacaClient,
         market_data: MarketData,
         risk_manager: RiskManager,
+        council: Optional["LLMCouncil"] = None,
+        kelly_sizer: Optional["KellySizer"] = None,
+        smart_executor: Optional["SmartExecutor"] = None,
+        journal: Optional["TradeJournal"] = None,
     ) -> None:
         self.client = client
         self.md = market_data
         self.rm = risk_manager
+        self.council = council
+        self.kelly = kelly_sizer
+        self.executor = smart_executor
+        self.journal = journal
         self.symbols = config.UNIVERSE.theta_symbols
-        self.active_positions: dict[str, dict] = {}  # symbol → trade metadata
+        self.active_positions: dict[str, dict] = {}
 
         console.print("[bold cyan]ThetaCollectorAgent initialised[/bold cyan]")
 
@@ -130,6 +151,32 @@ class ThetaCollectorAgent:
             log.info(f"[{symbol}] Skip: IVR={ivr:.1f} < {MIN_IVR_TO_ENTER}")
             return None
 
+        # ── Condition 3: LLM Council vote gate ────────────────────────
+        if self.council is not None:
+            ctx = SignalEnhancer.build_theta_context(
+                symbol=symbol,
+                price=price,
+                ivr=ivr,
+                vix=vix,
+                hist_vol=hist_vol,
+                dte=TARGET_DTE_MIN,
+            )
+            consensus = self.council.vote(symbol, ctx, strategy="theta_put")
+            console.print(consensus.summary())
+            if not consensus.agreed:
+                console.print(
+                    f"[yellow][COUNCIL VETO] {symbol} CSP: "
+                    f"score={consensus.net_score:+.3f} (threshold={consensus.threshold}). "
+                    f"Dissenting: {consensus.dissenting_models or 'none (all hold)'}[/yellow]"
+                )
+                log.info(
+                    f"[{symbol}] Council vetoed theta entry: "
+                    f"score={consensus.net_score:+.3f} | "
+                    f"votes={[(v.model.split('/')[-1], v.action, v.confidence) for v in consensus.votes]}"
+                )
+                return None
+        # ──────────────────────────────────────────────────────────────
+
         # Find target expiration (~30-45 DTE)
         expiry_min = (date.today() + timedelta(days=TARGET_DTE_MIN)).isoformat()
         expiry_max = (date.today() + timedelta(days=TARGET_DTE_MAX)).isoformat()
@@ -164,13 +211,21 @@ class ThetaCollectorAgent:
             log.info(f"[{symbol}] Premium too low ({premium:.2f}), skipping")
             return None
 
-
-        # Calculate notional value and number of contracts
+        # ── Kelly Criterion sizing ─────────────────────────────────────────
         notional = target_strike * 100
-        n_contracts = max(1, int((equity * 0.04) / max(notional * 0.20, 1000)))
+        margin_requirement = notional * 0.20  # 20% margin for CSP
 
-        # Option margin / capital at risk: 20% margin or premium * 100
-        margin_requirement = notional * 0.20
+        if self.kelly is not None:
+            # For short puts, "cost" = margin tied up; Kelly sizes on that
+            n_contracts = self.kelly.get_contract_count(
+                strategy="theta",
+                equity=equity,
+                premium_per_contract=margin_requirement,  # margin as the "spend"
+            )
+        else:
+            n_contracts = max(1, int((equity * 0.04) / max(margin_requirement, 1000)))
+        # ─────────────────────────────────────────────────────────────────
+
         order_value = max(premium * 100 * n_contracts, margin_requirement * n_contracts * 0.10)
 
         # Risk gate
@@ -181,10 +236,12 @@ class ThetaCollectorAgent:
             is_option=True,
         )
 
-        # Place order
-        result = self.client.place_option_market_order(
-            contract["symbol"], n_contracts, "sell"
-        )
+        # ── Smart limit order execution ────────────────────────────────────
+        if self.executor is not None:
+            result = self.executor.execute_option_order(contract["symbol"], n_contracts, "sell")
+        else:
+            result = self.client.place_option_market_order(contract["symbol"], n_contracts, "sell")
+        # ─────────────────────────────────────────────────────────────────
 
         action = {
             "agent": "ThetaCollector",
@@ -204,10 +261,24 @@ class ThetaCollectorAgent:
             "stop_loss_premium": premium * STOP_LOSS_MULTIPLIER,
         }
 
+        # ── Journal: log entry ─────────────────────────────────────────────
+        if self.journal is not None:
+            trade_id = self.journal.log_entry(
+                agent="ThetaCollector",
+                strategy="theta",
+                symbol=symbol,
+                contract=contract["symbol"],
+                side="sell",
+                qty=n_contracts,
+                entry_price=premium,
+            )
+            self.active_positions[symbol]["journal_id"] = trade_id
+        # ─────────────────────────────────────────────────────────────────
+
         console.print(
             f"[green][FILLED] ThetaCollector SOLD PUT: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} "
-            f"x{n_contracts} | premium=${premium*100*n_contracts:,.0f}[/green]"
+            f"x{n_contracts} | premium=${premium*100*n_contracts:,.0f} | Kelly-sized[/green]"
         )
         return action
 
@@ -223,8 +294,10 @@ class ThetaCollectorAgent:
         for symbol, meta in list(self.active_positions.items()):
             contract_symbol = meta.get("contract")
             if contract_symbol not in positions:
-                # Position already closed (expired worthless = max profit!)
+                # Position closed (expired worthless = max profit!)
                 console.print(f"[green][EXPIRED] {symbol} CSP expired worthless (max profit)[/green]")
+                if self.journal is not None and "journal_id" in meta:
+                    self.journal.log_exit(meta["journal_id"], 0.0, "expired_worthless")
                 del self.active_positions[symbol]
                 actions.append({"agent": "ThetaCollector", "action": "expired_worthless", "symbol": symbol})
                 continue
@@ -236,16 +309,33 @@ class ThetaCollectorAgent:
 
             # Exit: 50% profit target
             if profit_pct >= PROFIT_TARGET_PCT:
-                self._close_position(symbol, contract_symbol, meta["qty"], "profit_target")
-                actions.append({"agent": "ThetaCollector", "action": "closed_profit_target", "symbol": symbol, "profit_pct": profit_pct})
+                self._close_position(symbol, contract_symbol, meta, "profit_target", profit_pct)
+                actions.append({"agent": "ThetaCollector", "action": "closed_profit_target",
+                                 "symbol": symbol, "profit_pct": profit_pct})
 
         return actions
 
-    def _close_position(self, symbol: str, contract_symbol: str, qty: int, reason: str) -> None:
-        """Close (buy back) a short put."""
+    def _close_position(
+        self, symbol: str, contract_symbol: str, meta: dict, reason: str, profit_pct: float = 0.0
+    ) -> None:
+        """Close (buy back) a short put using SmartExecutor + journal logging."""
         try:
-            self.client.place_option_market_order(contract_symbol, qty, "buy")
+            qty = meta["qty"]
+            # ── Smart execution on close ───────────────────────────────────
+            if self.executor is not None:
+                self.executor.execute_option_order(contract_symbol, qty, "buy")
+            else:
+                self.client.place_option_market_order(contract_symbol, qty, "buy")
+            # ─────────────────────────────────────────────────────────────
+
+            # ── Journal: log exit ──────────────────────────────────────────
+            if self.journal is not None and "journal_id" in meta:
+                # For short put: current cost = entry × (1 - profit_pct)
+                exit_price = meta["entry_premium"] * (1 - profit_pct)
+                self.journal.log_exit(meta["journal_id"], exit_price, reason)
+            # ─────────────────────────────────────────────────────────────
+
             del self.active_positions[symbol]
-            console.print(f"[blue][CLOSED] ThetaCollector closed {symbol} [{reason}][/blue]")
+            console.print(f"[blue][CLOSED] ThetaCollector closed {symbol} [{reason}] profit={profit_pct:.1%}[/blue]")
         except Exception as e:
             log.error(f"Failed to close {symbol}: {e}")

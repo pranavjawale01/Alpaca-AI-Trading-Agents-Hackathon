@@ -28,8 +28,10 @@ from alpaca.trading.enums import (
     ContractType,
     ExerciseStyle,
 )
+from datetime import datetime, timedelta, timezone
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient, OptionHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest, OptionLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
 from rich.console import Console
 
@@ -223,12 +225,63 @@ class AlpacaClient:
         )
         return {"id": str(order.id), "status": str(order.status), "symbol": option_symbol}
 
+    def place_option_limit_order(
+        self,
+        option_symbol: str,
+        qty: int,
+        side: str,
+        limit_price: float,
+    ) -> dict:
+        """
+        Place a limit order on an options contract at a specified price.
+
+        Used by SmartExecutor to target mid-price fills, reducing slippage
+        vs. market orders on every entry and exit.
+
+        Args:
+            option_symbol: OCC-formatted symbol e.g. 'SPY250919C00500000'
+            qty:           Number of contracts
+            side:          'buy' | 'sell'
+            limit_price:   Limit price per share (multiply by 100 for per-contract)
+
+        Returns:
+            Order dict {id, status, symbol}
+        """
+        req = LimitOrderRequest(
+            symbol=option_symbol,
+            qty=qty,
+            side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
+            limit_price=round(limit_price, 2),
+            time_in_force=TimeInForce.DAY,
+        )
+        order = self.trading.submit_order(req)
+        log.info(
+            f"Option limit order: {side} {qty} {option_symbol} "
+            f"@ ${limit_price:.2f} | id={order.id}"
+        )
+        return {"id": str(order.id), "status": str(order.status), "symbol": option_symbol}
+
     # ─────────────────────────────────────────
     # Market Data
     # ─────────────────────────────────────────
 
     def get_latest_quote(self, symbol: str) -> dict:
         """Get latest bid/ask for a symbol."""
+        try:
+            req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
+            quotes = self.stock_data.get_stock_latest_quote(req)
+            if symbol in quotes:
+                q = quotes[symbol]
+                return {
+                    "symbol": symbol,
+                    "bid": float(q.bid_price),
+                    "ask": float(q.ask_price),
+                    "mid": (float(q.bid_price) + float(q.ask_price)) / 2,
+                }
+        except Exception as e:
+            log.warning(f"Failed to fetch IEX quote for {symbol}: {e}")
+
+        # Fallback to default feed
         req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
         quotes = self.stock_data.get_stock_latest_quote(req)
         q = quotes[symbol]
@@ -238,6 +291,28 @@ class AlpacaClient:
             "ask": float(q.ask_price),
             "mid": (float(q.bid_price) + float(q.ask_price)) / 2,
         }
+
+    def get_option_quote(self, option_symbol: str) -> dict:
+        """
+        Fetch current live bid/ask/mid for an option contract via Option Historical/Latest API.
+        """
+        try:
+            req = OptionLatestQuoteRequest(symbol_or_symbols=option_symbol)
+            quotes = self.option_data.get_option_latest_quote(req)
+            if option_symbol in quotes:
+                q = quotes[option_symbol]
+                bid = float(q.bid_price) if q.bid_price else 0.0
+                ask = float(q.ask_price) if q.ask_price else 0.0
+                mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else max(bid, ask)
+                return {
+                    "symbol": option_symbol,
+                    "bid": bid,
+                    "ask": ask,
+                    "mid": round(mid, 2),
+                }
+        except Exception as e:
+            log.debug(f"Option quote lookup note for {option_symbol}: {e}")
+        return {"symbol": option_symbol, "bid": 0.0, "ask": 0.0, "mid": 0.0}
 
     def get_bars(
         self,
@@ -250,17 +325,48 @@ class AlpacaClient:
         timeframe: '1Min' | '5Min' | '1Hour' | '1Day'
         """
         tf_map = {
-            "1Min": TimeFrame.Minute,
-            "5Min": TimeFrame(5, "Min"),
-            "1Hour": TimeFrame.Hour,
-            "1Day": TimeFrame.Day,
+            "1Min": (TimeFrame.Minute, timedelta(days=2)),
+            "5Min": (TimeFrame(5, "Min"), timedelta(days=7)),
+            "1Hour": (TimeFrame.Hour, timedelta(days=30)),
+            "1Day": (TimeFrame.Day, timedelta(days=max(limit * 3, 120))),
         }
+        tf, delta = tf_map.get(timeframe, (TimeFrame.Day, timedelta(days=120)))
+        start_dt = datetime.now(timezone.utc) - delta
+
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=tf,
+                limit=limit,
+                start=start_dt,
+                feed=DataFeed.IEX,
+            )
+            bars = self.stock_data.get_stock_bars(req)
+            if symbol in bars.data and bars[symbol]:
+                return [
+                    {
+                        "t": str(b.timestamp),
+                        "o": float(b.open),
+                        "h": float(b.high),
+                        "l": float(b.low),
+                        "c": float(b.close),
+                        "v": float(b.volume),
+                    }
+                    for b in bars[symbol]
+                ]
+        except Exception as e:
+            log.warning(f"IEX bars fetch failed for {symbol}: {e}")
+
+        # Fallback to default request without feed
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
-            timeframe=tf_map.get(timeframe, TimeFrame.Day),
+            timeframe=tf,
             limit=limit,
+            start=start_dt,
         )
         bars = self.stock_data.get_stock_bars(req)
+        if symbol not in bars.data:
+            return []
         return [
             {
                 "t": str(b.timestamp),

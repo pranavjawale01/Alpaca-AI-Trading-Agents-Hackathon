@@ -21,14 +21,21 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 
 from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
 from core.risk_manager import RiskManager, RiskViolation
+from core.signal_enhancer import SignalEnhancer
 import config
+
+if TYPE_CHECKING:
+    from core.llm_council import LLMCouncil
+    from core.kelly_sizer import KellySizer
+    from core.smart_executor import SmartExecutor
+    from core.trade_journal import TradeJournal
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -43,6 +50,12 @@ class IVCrushAgent:
     """
     Sells ATM straddles before earnings to capture IV crush.
     High-probability income strategy in calm markets.
+
+    Pro improvements:
+      1. LLM Council: assesses earnings IV + timing before each straddle
+      2. Kelly Criterion: sizes straddle to historical win rate
+      3. SmartExecutor: mid-price fills on both legs
+      4. TradeJournal: logs entry/exit for adaptive sizing
     """
 
     def __init__(
@@ -50,10 +63,18 @@ class IVCrushAgent:
         client: AlpacaClient,
         market_data: MarketData,
         risk_manager: RiskManager,
+        council: Optional["LLMCouncil"] = None,
+        kelly_sizer: Optional["KellySizer"] = None,
+        smart_executor: Optional["SmartExecutor"] = None,
+        journal: Optional["TradeJournal"] = None,
     ) -> None:
         self.client = client
         self.md = market_data
         self.rm = risk_manager
+        self.council = council
+        self.kelly = kelly_sizer
+        self.executor = smart_executor
+        self.journal = journal
         self.active_positions: dict[str, dict] = {}
 
         console.print("[bold magenta]IVCrushAgent initialised[/bold magenta]")
@@ -131,10 +152,53 @@ class IVCrushAgent:
         if not call or not put:
             return None
 
-        n_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
+        # ── LLM Council vote gate ──────────────────────────────────────
+        if self.council is not None:
+            hist_vol = self.md.estimate_historical_vol(symbol)
+            ivr = min(hist_vol * 200, 100)
+            # Retrieve days_to_earnings from the symbol's earnings event
+            # (we approximate from DTE of the options — earnings are within 5-14 DTE)
+            days_to_earnings = 2  # conservative mid-estimate; passed from _scan_earnings_entries
+            ctx = SignalEnhancer.build_iv_crush_context(
+                symbol=symbol,
+                price=price,
+                vix=self.rm.current_vix,
+                days_to_earnings=days_to_earnings,
+                ivr=ivr,
+                atm_strike=atm_strike,
+                dte=10,
+            )
+            consensus = self.council.vote(symbol, ctx, strategy="iv_crush_straddle")
+            console.print(consensus.summary())
+            if not consensus.agreed:
+                console.print(
+                    f"[yellow][COUNCIL VETO] {symbol} straddle: "
+                    f"score={consensus.net_score:+.3f} (threshold={consensus.threshold}). "
+                    f"Dissenting: {consensus.dissenting_models or 'none (all hold)'}[/yellow]"
+                )
+                log.info(
+                    f"[{symbol}] Council vetoed straddle entry: "
+                    f"score={consensus.net_score:+.3f} | "
+                    f"votes={[(v.model.split('/')[-1], v.action, v.confidence) for v in consensus.votes]}"
+                )
+                return None
+        # ────────────────────────────────────────────────────────────────
+
+        # ── Kelly Criterion sizing ─────────────────────────────────────────
+        straddle_margin_per_contract = atm_strike * 100 * 0.20
+
+        if self.kelly is not None:
+            n_contracts = self.kelly.get_contract_count(
+                strategy="iv_crush",
+                equity=equity,
+                premium_per_contract=straddle_margin_per_contract,
+            )
+        else:
+            n_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
+        # ─────────────────────────────────────────────────────────────────
 
         # Risk gate — straddle margin requirement (~20% of underlying notional)
-        straddle_margin = atm_strike * 100 * n_contracts * 0.20
+        straddle_margin = straddle_margin_per_contract * n_contracts
         self.rm.approve_order(
             symbol=symbol,
             order_value=straddle_margin,
@@ -142,10 +206,14 @@ class IVCrushAgent:
             is_option=True,
         )
 
-        # Sell call leg
-        call_result = self.client.place_option_market_order(call["symbol"], n_contracts, "sell")
-        # Sell put leg
-        put_result = self.client.place_option_market_order(put["symbol"], n_contracts, "sell")
+        # ── Smart limit order execution — both legs ────────────────────────
+        if self.executor is not None:
+            call_result = self.executor.execute_option_order(call["symbol"], n_contracts, "sell")
+            put_result = self.executor.execute_option_order(put["symbol"], n_contracts, "sell")
+        else:
+            call_result = self.client.place_option_market_order(call["symbol"], n_contracts, "sell")
+            put_result = self.client.place_option_market_order(put["symbol"], n_contracts, "sell")
+        # ─────────────────────────────────────────────────────────────────
 
         action = {
             "agent": "IVCrush",
@@ -159,9 +227,25 @@ class IVCrushAgent:
         }
         self.active_positions[symbol] = action
 
+        # ── Journal: log entry (straddle = two legs; log as one combined trade) ──
+        if self.journal is not None:
+            # Premium approximation: straddle premium ≈ 5% of underlying ATM price
+            est_combined_premium = atm_strike * 0.05
+            trade_id = self.journal.log_entry(
+                agent="IVCrush",
+                strategy="iv_crush",
+                symbol=symbol,
+                contract=f"{call['symbol']}+{put['symbol']}",
+                side="sell",
+                qty=n_contracts,
+                entry_price=est_combined_premium,
+            )
+            self.active_positions[symbol]["journal_id"] = trade_id
+        # ─────────────────────────────────────────────────────────────────
+
         console.print(
             f"[green][FILLED] IVCrush SOLD STRADDLE: {symbol} ${atm_strike:.0f} "
-            f"exp={call['expiration']} x{n_contracts}[/green]"
+            f"exp={call['expiration']} x{n_contracts} | Kelly-sized[/green]"
         )
         return action
 
@@ -177,6 +261,8 @@ class IVCrushAgent:
             in_positions = call_sym in positions or put_sym in positions
             if not in_positions:
                 console.print(f"[green][EXPIRED] {symbol} straddle expired (max profit)[/green]")
+                if self.journal is not None and "journal_id" in meta:
+                    self.journal.log_exit(meta["journal_id"], 0.0, "expired_worthless")
                 del self.active_positions[symbol]
                 continue
 

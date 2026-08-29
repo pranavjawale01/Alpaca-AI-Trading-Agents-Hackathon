@@ -129,9 +129,9 @@ class CouncilConfig:
     models: list = field(
         default_factory=lambda: (
             [
-                os.getenv("COUNCIL_MODEL_1", "llama-3.1-8b-instant"),
-                os.getenv("COUNCIL_MODEL_2", "mixtral-8x7b-32768"),
-                os.getenv("COUNCIL_MODEL_3", "llama-3.3-70b-versatile"),
+                os.getenv("COUNCIL_MODEL_1", "openai/gpt-oss-120b"),
+                os.getenv("COUNCIL_MODEL_2", "groq/compound"),
+                os.getenv("COUNCIL_MODEL_3", "qwen/qwen3.6-27b"),
             ]
             if ("groq.com" in FEATHERLESS_BASE_URL or os.getenv("GROQ_API_KEY"))
             else [

@@ -243,7 +243,7 @@ class LLMCouncil:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,  # low temp for deterministic trading decisions
-            max_tokens=200,
+            max_tokens=500,
         )
 
         raw = response.choices[0].message.content or ""
@@ -252,11 +252,16 @@ class LLMCouncil:
     def _parse_vote(self, model_id: str, raw: str) -> ModelVote:
         """Parse a model's JSON response into a ModelVote."""
         try:
+            cleaned = raw
+            # Strip reasoning tags if present (e.g. DeepSeek/Qwen <think>...</think>)
+            if "</think>" in cleaned:
+                cleaned = cleaned.split("</think>")[-1]
+
             # Find JSON object in response
-            if "{" in raw:
-                start = raw.index("{")
-                end = raw.rindex("}") + 1
-                data = json.loads(raw[start:end])
+            if "{" in cleaned:
+                start = cleaned.index("{")
+                end = cleaned.rindex("}") + 1
+                data = json.loads(cleaned[start:end])
 
                 action = str(data.get("action", "hold")).lower()
                 if action not in _ACTION_SCORE:

@@ -23,14 +23,27 @@ ALPACA_BASE_URL: str = os.getenv(
 ALPACA_DATA_URL: str = "https://data.alpaca.markets"
 
 # ──────────────────────────────────────────────
-# Featherless AI (LLM Reasoning)
+# LLM / AI Reasoning (Featherless, Groq, OpenRouter, or OpenAI)
+# Any OpenAI-compatible provider works. Free options: Groq (https://console.groq.com)
 # ──────────────────────────────────────────────
-FEATHERLESS_API_KEY: str = os.getenv("FEATHERLESS_API_KEY", "")
-FEATHERLESS_BASE_URL: str = os.getenv(
-    "FEATHERLESS_BASE_URL", "https://api.featherless.ai/v1"
+FEATHERLESS_API_KEY: str = (
+    os.getenv("FEATHERLESS_API_KEY")
+    or os.getenv("GROQ_API_KEY")
+    or os.getenv("OPENROUTER_API_KEY")
+    or os.getenv("OPENAI_API_KEY")
+    or ""
 )
+
+_default_base_url = "https://api.featherless.ai/v1"
+if os.getenv("GROQ_API_KEY") or "gsk_" in FEATHERLESS_API_KEY:
+    _default_base_url = "https://api.groq.com/openai/v1"
+elif os.getenv("OPENROUTER_API_KEY"):
+    _default_base_url = "https://openrouter.ai/api/v1"
+
+FEATHERLESS_BASE_URL: str = os.getenv("FEATHERLESS_BASE_URL", _default_base_url)
 FEATHERLESS_MODEL: str = os.getenv(
-    "FEATHERLESS_MODEL", "meta-llama/Llama-3.1-8B-Instruct"
+    "FEATHERLESS_MODEL",
+    "llama-3.1-8b-instant" if "groq.com" in FEATHERLESS_BASE_URL else "meta-llama/Llama-3.1-8B-Instruct",
 )
 
 
@@ -114,14 +127,19 @@ class CouncilConfig:
     # The three models that form the council.
     # All must be available on your Featherless AI account.
     models: list = field(
-        default_factory=lambda: [
-            # Model 1: Fast primary (already used by MCPBridge)
-            os.getenv("COUNCIL_MODEL_1", "meta-llama/Llama-3.1-8B-Instruct"),
-            # Model 2: Contrarian check (different training distribution)
-            os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.3"),
-            # Model 3: Chain-of-thought reasoner for edge-case accuracy
-            os.getenv("COUNCIL_MODEL_3", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
-        ]
+        default_factory=lambda: (
+            [
+                os.getenv("COUNCIL_MODEL_1", "llama-3.1-8b-instant"),
+                os.getenv("COUNCIL_MODEL_2", "mixtral-8x7b-32768"),
+                os.getenv("COUNCIL_MODEL_3", "llama-3.3-70b-versatile"),
+            ]
+            if ("groq.com" in FEATHERLESS_BASE_URL or os.getenv("GROQ_API_KEY"))
+            else [
+                os.getenv("COUNCIL_MODEL_1", "meta-llama/Llama-3.1-8B-Instruct"),
+                os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.3"),
+                os.getenv("COUNCIL_MODEL_3", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
+            ]
+        )
     )
 
     # Minimum |weighted score| required to act on a signal.

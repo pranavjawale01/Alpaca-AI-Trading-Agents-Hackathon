@@ -107,7 +107,8 @@ class KellySizer:
 
         # Compute effective Kelly fraction with hybrid multipliers
         effective_kelly = self.kelly_fraction * size_multiplier * greedy_multiplier
-        max_kelly = config.HYBRID.max_kelly_fraction
+        hybrid = getattr(config, "HYBRID", None)
+        max_kelly = hybrid.max_kelly_fraction if hybrid else 0.50
         effective_kelly = min(effective_kelly, max_kelly)
 
         if size_multiplier <= 0.0:

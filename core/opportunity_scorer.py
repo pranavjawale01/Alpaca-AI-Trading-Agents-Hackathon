@@ -63,13 +63,15 @@ class OpportunityScorer:
             greedy_enabled: Enable/disable greedy scaling. Defaults to config.HYBRID.greedy_enabled.
             max_greedy_multiplier: Upper cap on the computed multiplier. Defaults to config.HYBRID.max_greedy_multiplier.
         """
+        hybrid = getattr(config, "HYBRID", None)
+        
         self.greedy_enabled: bool = (
-            config.HYBRID.greedy_enabled
+            (hybrid.greedy_enabled if hybrid else True)
             if greedy_enabled is None
             else greedy_enabled
         )
         self.max_greedy_multiplier: float = (
-            config.HYBRID.max_greedy_multiplier
+            (hybrid.max_greedy_multiplier if hybrid else 2.0)
             if max_greedy_multiplier is None
             else max_greedy_multiplier
         )

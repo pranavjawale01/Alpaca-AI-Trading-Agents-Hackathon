@@ -70,17 +70,30 @@ st.set_page_config(
 )
 
 # ── Persistent Keep-Alive (Prevents Streamlit Cloud Hibernation) ──
-components.html("""
-<script>
-    // Keep-alive heartbeat: ping self every 4.5 minutes to prevent Cloud sleep
-    setInterval(function() {
-        try {
-            fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
-            console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
-        } catch(e) {}
-    }, 270000);
-</script>
-""", height=0)
+if hasattr(st, "html"):
+    st.html("""
+    <script>
+        // Keep-alive heartbeat: ping self every 4.5 minutes to prevent Cloud sleep
+        setInterval(function() {
+            try {
+                fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
+                console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
+            } catch(e) {}
+        }, 270000);
+    </script>
+    """, unsafe_allow_javascript=True)
+else:
+    components.html("""
+    <script>
+        // Keep-alive heartbeat: ping self every 4.5 minutes to prevent Cloud sleep
+        setInterval(function() {
+            try {
+                fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
+                console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
+            } catch(e) {}
+        }, 270000);
+    </script>
+    """, height=0)
 
 # ── Custom CSS for High-End Financial Terminal UI ─────────────
 st.markdown("""
@@ -212,7 +225,7 @@ def get_background_engine():
 
     def _auto_pilot_worker():
         hybrid = getattr(config, "HYBRID", None)
-        interval_secs = (hybrid.session_interval_minutes if hybrid else 60) * 60
+        interval_secs = (getattr(hybrid, "session_interval_minutes", 60) if hybrid else 60) * 60
         last_executed_time = None
         while True:
             try:
@@ -297,7 +310,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # Manual Trigger Button
-    if st.button("▶ Run Trading Session Now", use_container_width=True, disabled=bg_state["is_busy"]):
+    if st.button("▶ Run Trading Session Now", width="stretch", disabled=bg_state["is_busy"]):
         with st.status("Executing Autonomous Multi-Agent Trading Session...", expanded=True) as status_box:
             st.write("Initializing market data, risk manager, and LLM council...")
             try:
@@ -473,7 +486,7 @@ if data_loaded:
                 paper_bgcolor="#0d1117",
                 plot_bgcolor="#0d1117",
             )
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            st.plotly_chart(fig_gauge, width="stretch")
 
         with health_col2:
             st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px; text-align: center;'>Capital Allocation Breakdown</div>", unsafe_allow_html=True)
@@ -501,7 +514,7 @@ if data_loaded:
                 showlegend=True,
                 legend=dict(orientation="h", y=-0.1, x=0.5, xanchor="center")
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -519,7 +532,7 @@ if data_loaded:
                     "Market Value": df_pos["market_value"].astype(float).map("${:,.2f}".format),
                     "P&L": df_pos["unrealized_pl"].astype(float).map("${:+,.2f}".format),
                 })
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_df, width="stretch", hide_index=True)
             else:
                 st.info("No open positions. Autonomous agent scans watchlist at session open.")
 
@@ -684,7 +697,7 @@ if data_loaded:
             scan_df = pd.DataFrame(scan_rows)
             st.dataframe(
                 scan_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=(len(scan_rows) + 1) * 36 + 10,
             )
@@ -721,7 +734,7 @@ if data_loaded:
         kelly_df = pd.DataFrame(kelly_live_rows)
         st.dataframe(
             kelly_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=(len(kelly_live_rows) + 1) * 38 + 10,
         )
@@ -761,7 +774,7 @@ if data_loaded:
             matrix_df = pd.DataFrame(matrix_rows)
             st.dataframe(
                 matrix_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=(len(matrix_rows) + 1) * 36 + 10,
             )
@@ -780,7 +793,7 @@ if data_loaded:
             if not trades_df.empty:
                 st.dataframe(
                     trades_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=min(400, (len(trades_df) + 1) * 36 + 10),
                 )
@@ -978,7 +991,7 @@ if data_loaded:
                 )
                 
                 fig.update_xaxes(type="category", gridcolor=TV_GRID, nticks=10)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             else:
                 st.info(f"Historical market data is being retrieved for {selected_asset}...")
@@ -1085,7 +1098,7 @@ if data_loaded:
                     hovermode="x unified",
                     showlegend=False
                 )
-                st.plotly_chart(fig_payoff, use_container_width=True)
+                st.plotly_chart(fig_payoff, width="stretch")
 
         else:
             st.info("No active options positions to simulate. Open options will display individual expiration risk profiles here.")
@@ -1112,7 +1125,7 @@ if data_loaded:
             """, unsafe_allow_html=True)
         with e3:
             hybrid = getattr(config, "HYBRID", None)
-            interval_mins = hybrid.session_interval_minutes if hybrid else 60
+            interval_mins = getattr(hybrid, "session_interval_minutes", 60) if hybrid else 60
             st.markdown(f"""
             <div class="metric-card" style="border-left: 4px solid #bc8cff;">
                 <div class="metric-label">Sessions Completed</div>

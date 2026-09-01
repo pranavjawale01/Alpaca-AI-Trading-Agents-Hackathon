@@ -64,14 +64,13 @@ class OpportunityScorer:
             max_greedy_multiplier: Upper cap on the computed multiplier. Defaults to config.HYBRID.max_greedy_multiplier.
         """
         hybrid = getattr(config, "HYBRID", None)
-        
         self.greedy_enabled: bool = (
-            (hybrid.greedy_enabled if hybrid else True)
+            getattr(hybrid, "greedy_enabled", True)
             if greedy_enabled is None
             else greedy_enabled
         )
         self.max_greedy_multiplier: float = (
-            (hybrid.max_greedy_multiplier if hybrid else 2.0)
+            getattr(hybrid, "max_greedy_multiplier", 2.0)
             if max_greedy_multiplier is None
             else max_greedy_multiplier
         )

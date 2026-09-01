@@ -119,6 +119,8 @@ class Orchestrator:
         self.hedge = HedgeAgent(self.client, self.md, self.rm)  # hedge never filtered
 
         self.session_log: list[dict] = []
+        self._cached_earnings: list[dict] = []
+        self._earnings_last_fetched: Optional[datetime] = None
         console.print("[bold green]All agents initialised successfully (HYBRID MODE)[/bold green]")
 
     # ─────────────────────────────────────────
@@ -238,8 +240,16 @@ class Orchestrator:
     def _get_earnings_calendar(self, regime: str) -> list[dict]:
         """
         Use LLM (via MCP) to get earnings events for the watchlist.
+        Caches results for 6 hours to avoid redundant LLM queries.
         Falls back to empty list if MCP is unavailable.
         """
+        now = datetime.now(timezone.utc)
+        if (
+            self._earnings_last_fetched is not None
+            and (now - self._earnings_last_fetched).total_seconds() < 21600  # 6 hours
+        ):
+            return self._cached_earnings
+
         watchlist = [
             "AAPL", "NVDA", "TSLA", "META", "AMZN", "MSFT", "GOOGL", "AMD"
         ]
@@ -255,11 +265,13 @@ class Orchestrator:
                 end = response.rindex("]") + 1
                 calendar = json.loads(response[start:end])
                 log.info(f"Earnings calendar from LLM: {calendar}")
+                self._cached_earnings = calendar
+                self._earnings_last_fetched = now
                 return calendar
         except Exception as e:
             log.warning(f"Earnings calendar fetch failed: {e}")
 
-        return []  # safe fallback
+        return self._cached_earnings if self._cached_earnings else []
 
     # ─────────────────────────────────────────
     # Reporting

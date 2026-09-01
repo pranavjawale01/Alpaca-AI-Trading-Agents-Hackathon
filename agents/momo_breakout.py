@@ -112,74 +112,122 @@ class MomoBreakoutAgent:
             size_multiplier = 1.0
 
             try:
+                # ── 1. Mathematical Breakout Signals (Zero LLM calls) ────────
                 ema_signal = self.md.get_ema_signal(symbol)
                 vol_surge = self.md.get_volume_surge(symbol)
 
-                # Both conditions must be true
-                if ema_signal["crossover"] and vol_surge["is_surging"]:
-                    console.print(
-                        f"[yellow][SIGNAL] Breakout detected: {symbol} | "
-                        f"EMA={ema_signal['signal']} | surge={vol_surge['surge_ratio']:.1f}x[/yellow]"
+                # Both mathematical conditions must be true
+                if not (ema_signal.get("crossover") and vol_surge.get("is_surging")):
+                    continue
+
+                console.print(
+                    f"[yellow][SIGNAL] Breakout detected: {symbol} | "
+                    f"EMA={ema_signal.get('signal')} | surge={vol_surge.get('surge_ratio', 1.0):.1f}x[/yellow]"
+                )
+
+                # ── 2. Contract & Option Pricing Feasibility ──────────────────
+                price = self.md.get_price(symbol)
+                hist_vol = self.md.estimate_historical_vol(symbol)
+
+                expiry_min = (date.today() + timedelta(days=28)).isoformat()
+                expiry_max = (date.today() + timedelta(days=45)).isoformat()
+
+                calls = self.client.get_option_contracts(symbol, expiry_min, expiry_max, "call")
+                if not calls:
+                    log.info(f"[{symbol}] No call contracts found in DTE range")
+                    continue
+
+                target_strike = self.md.find_otm_strike(
+                    symbol, [c["strike"] for c in calls], "call", OTM_PCT
+                )
+                contract = next((c for c in calls if c["strike"] == target_strike), None)
+                if not contract:
+                    log.info(f"[{symbol}] Target strike ${target_strike} not available")
+                    continue
+
+                est_premium = price * 0.03
+                if est_premium <= 0.01:
+                    log.info(f"[{symbol}] Premium too low (${est_premium:.2f}), skipping")
+                    continue
+
+                # ── 3. Preliminary Kelly Sizing Check ────────────────────────
+                if self.kelly is not None:
+                    prelim_contracts = self.kelly.get_contract_count(
+                        strategy="momo",
+                        equity=equity,
+                        premium_per_contract=est_premium * 100,
+                        override_max_pct=MAX_PREMIUM_PER_TRADE_PCT,
+                        size_multiplier=1.0,
+                        greedy_multiplier=1.0,
+                    )
+                else:
+                    prelim_contracts = max(1, int((equity * MAX_PREMIUM_PER_TRADE_PCT) / (est_premium * 100)))
+
+                if prelim_contracts <= 0:
+                    log.info(f"[{symbol}] Kelly preliminary sizing = 0 contracts, skipping")
+                    continue
+
+                # ── 4. Opportunity Scorer — greedy multiplier ─────────────────
+                greedy_multiplier = 1.0
+                if self.opportunity_scorer is not None:
+                    opp_ctx = {
+                        "ivr": min(hist_vol * 200, 100),
+                        "vix": self.rm.current_vix,
+                        "ema_signal": ema_signal.get("signal", "neutral"),
+                        "ema_crossover": ema_signal.get("crossover", False),
+                        "volume_surge_ratio": vol_surge.get("surge_ratio", 1.0),
+                        "strategy": "momo",
+                    }
+                    greedy_multiplier = self.opportunity_scorer.score(
+                        opp_ctx,
+                        open_positions=list(self.active_positions.keys()),
+                        session_pnl=self.rm.daily_pnl,
                     )
 
-                    # ── LLM Council vote gate ──────────────────────────
-                    if self.council is not None:
-                        price = self.md.get_price(symbol)
-                        hist_vol = self.md.estimate_historical_vol(symbol)
-                        ctx = SignalEnhancer.build_momo_context(
-                            symbol=symbol,
-                            ema_signal=ema_signal,
-                            vol_surge=vol_surge,
-                            vix=self.rm.current_vix,
-                            price=price,
-                            hist_vol=hist_vol,
-                        )
-                        consensus = self.council.vote(symbol, ctx, strategy="momentum_call")
-                        console.print(consensus.summary())
-                        if consensus.conviction_tier == "veto":
-                            console.print(
-                                f"[yellow][COUNCIL VETO] {symbol} momo: "
-                                f"score={consensus.net_score:+.3f} | tier=VETO[/yellow]"
-                            )
-                            log.info(
-                                f"[{symbol}] Council vetoed momo entry: "
-                                f"score={consensus.net_score:+.3f} | tier=veto"
-                            )
-                            continue  # skip this trade
-                        size_multiplier = consensus.size_multiplier
+                # ── 5. LLM Council Vote Gate (Only runs after ALL math passes) ──
+                size_multiplier = 1.0
+                consensus = None
+                if self.council is not None:
+                    ctx = SignalEnhancer.build_momo_context(
+                        symbol=symbol,
+                        ema_signal=ema_signal,
+                        vol_surge=vol_surge,
+                        vix=self.rm.current_vix,
+                        price=price,
+                        hist_vol=hist_vol,
+                    )
+                    consensus = self.council.vote(symbol, ctx, strategy="momentum_call")
+                    console.print(consensus.summary())
+                    if consensus.conviction_tier == "veto":
                         console.print(
-                            f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} momo: "
-                            f"size_mult={size_multiplier:.2f}[/green]"
+                            f"[yellow][COUNCIL VETO] {symbol} momo: "
+                            f"score={consensus.net_score:+.3f} | tier=VETO[/yellow]"
                         )
-                    # ──────────────────────────────────────────────────
-
-                    # ── Opportunity Scorer — greedy multiplier ─────────
-                    greedy_multiplier = 1.0
-                    if self.opportunity_scorer is not None:
-                        opp_ctx = {
-                            "ivr": min(self.md.estimate_historical_vol(symbol) * 200, 100),
-                            "vix": self.rm.current_vix,
-                            "ema_signal": ema_signal.get("signal", "neutral"),
-                            "ema_crossover": ema_signal.get("crossover", False),
-                            "volume_surge_ratio": vol_surge.get("surge_ratio", 1.0),
-                            "strategy": "momo",
-                        }
-                        greedy_multiplier = self.opportunity_scorer.score(
-                            opp_ctx,
-                            open_positions=list(self.active_positions.keys()),
-                            session_pnl=self.rm.daily_pnl,
+                        log.info(
+                            f"[{symbol}] Council vetoed momo entry: "
+                            f"score={consensus.net_score:+.3f} | tier=veto"
                         )
-                    # ──────────────────────────────────────────────────
-
-                    votes_list = consensus.votes if (self.council and consensus) else []
-                    action = self._buy_call(
-                        symbol, equity,
-                        size_multiplier=size_multiplier,
-                        greedy_multiplier=greedy_multiplier,
-                        votes=votes_list,
+                        continue
+                    size_multiplier = consensus.size_multiplier
+                    console.print(
+                        f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} momo: "
+                        f"size_mult={size_multiplier:.2f}[/green]"
                     )
-                    if action:
-                        actions.append(action)
+
+                # ── 6. Final Kelly Sizing & Execution ─────────────────────────
+                votes_list = consensus.votes if (self.council and consensus) else []
+                action = self._buy_call(
+                    symbol=symbol,
+                    equity=equity,
+                    contract=contract,
+                    target_strike=target_strike,
+                    est_premium=est_premium,
+                    size_multiplier=size_multiplier,
+                    greedy_multiplier=greedy_multiplier,
+                    votes=votes_list,
+                )
+                if action:
+                    actions.append(action)
 
             except RiskViolation as e:
                 console.print(f"[yellow][RISK BLOCK] [{symbol} momo]: {e}[/yellow]")
@@ -192,30 +240,14 @@ class MomoBreakoutAgent:
         self,
         symbol: str,
         equity: float,
+        contract: dict,
+        target_strike: float,
+        est_premium: float,
         size_multiplier: float = 1.0,
         greedy_multiplier: float = 1.0,
         votes: Optional[list] = None,
     ) -> Optional[dict]:
         """Buy OTM call using Kelly-sized position and mid-price limit order."""
-        expiry_min = (date.today() + timedelta(days=28)).isoformat()
-        expiry_max = (date.today() + timedelta(days=45)).isoformat()
-
-        calls = self.client.get_option_contracts(symbol, expiry_min, expiry_max, "call")
-        if not calls:
-            log.info(f"[{symbol}] No call contracts found")
-            return None
-
-        # Find 5% OTM call
-        target_strike = self.md.find_otm_strike(
-            symbol, [c["strike"] for c in calls], "call", OTM_PCT
-        )
-        contract = next((c for c in calls if c["strike"] == target_strike), None)
-        if not contract:
-            return None
-
-        price = self.md.get_price(symbol)
-        est_premium = price * 0.03  # rough OTM estimate per share
-
         # ── Kelly Criterion sizing ────────────────────────────────────
         if self.kelly is not None:
             n_contracts = self.kelly.get_contract_count(
@@ -228,7 +260,9 @@ class MomoBreakoutAgent:
             )
         else:
             n_contracts = max(1, int((equity * MAX_PREMIUM_PER_TRADE_PCT) / (est_premium * 100)))
-        # ─────────────────────────────────────────────────────────────
+
+        if n_contracts <= 0:
+            return None
 
         order_value = est_premium * 100 * n_contracts
 

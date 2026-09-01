@@ -141,20 +141,88 @@ class ThetaCollectorAgent:
         hist_vol = self.md.estimate_historical_vol(symbol)
         vix = self.rm.current_vix
 
+        # ── 1. Mathematical & Market Regime Gates (Zero LLM calls) ─────
         # Condition 1: VIX check (don't sell premium in volatile markets)
         if vix >= 30:
             log.info(f"[{symbol}] Skip: VIX={vix:.1f} >= 30")
             return None
 
         # Condition 2: IVR check (simplified — use hist vol as proxy)
-        # In production, use actual IV from options chain
         ivr = min(hist_vol * 200, 100)  # heuristic IVR proxy
         if ivr < MIN_IVR_TO_ENTER:
             log.info(f"[{symbol}] Skip: IVR={ivr:.1f} < {MIN_IVR_TO_ENTER}")
             return None
 
-        # ── Condition 3: Hybrid LLM Council vote gate ─────────────────
+        # Condition 3: Find target expiration (~30-45 DTE) & available contracts
+        expiry_min = (date.today() + timedelta(days=TARGET_DTE_MIN)).isoformat()
+        expiry_max = (date.today() + timedelta(days=TARGET_DTE_MAX)).isoformat()
+
+        contracts = self.client.get_option_contracts(
+            symbol,
+            expiration_date_gte=expiry_min,
+            expiration_date_lte=expiry_max,
+            contract_type="put",
+        )
+
+        if not contracts:
+            log.info(f"[{symbol}] No put contracts found for target DTE range")
+            return None
+
+        # Condition 4: Find ~20 delta put (10% OTM)
+        target_strike = self.md.find_otm_strike(
+            symbol,
+            [c["strike"] for c in contracts],
+            option_type="put",
+            otm_pct=0.10,
+        )
+        contract = next((c for c in contracts if c["strike"] == target_strike), None)
+        if not contract:
+            return None
+
+        # Condition 5: Calculate premium via Black-Scholes model
+        T = TARGET_DTE_MIN / 365
+        from core.options_pricer import black_scholes_price
+        premium = black_scholes_price(price, target_strike, T, RISK_FREE_RATE, hist_vol, "put")
+        if premium <= 0.01:
+            log.info(f"[{symbol}] Premium too low (${premium:.2f}), skipping")
+            return None
+
+        # Condition 6: Margin requirement & preliminary sizing check
+        notional = target_strike * 100
+        margin_requirement = notional * 0.20  # 20% margin for CSP
+
+        if self.kelly is not None:
+            prelim_contracts = self.kelly.get_contract_count(
+                strategy="theta",
+                equity=equity,
+                premium_per_contract=margin_requirement,
+                size_multiplier=1.0,
+                greedy_multiplier=1.0,
+            )
+        else:
+            prelim_contracts = max(1, int((equity * 0.04) / max(margin_requirement, 1000)))
+
+        if prelim_contracts <= 0:
+            log.info(f"[{symbol}] Kelly preliminary sizing = 0 contracts, skipping")
+            return None
+
+        # ── 2. Opportunity Scorer — greedy multiplier ─────────────────
+        greedy_multiplier = 1.0
+        if self.opportunity_scorer is not None:
+            opp_ctx = {
+                "ivr": ivr, "vix": vix,
+                "ema_signal": "bullish",  # theta assumes bullish/neutral
+                "strategy": "theta",
+            }
+            open_syms = list(self.active_positions.keys())
+            greedy_multiplier = self.opportunity_scorer.score(
+                opp_ctx, open_positions=open_syms,
+                session_pnl=self.rm.daily_pnl,
+            )
+
+        # ── 3. LLM Council Vote Gate (Only runs after ALL math passes) ──
         size_multiplier = 1.0  # default if council disabled
+        consensus = None
         if self.council is not None:
             ctx = SignalEnhancer.build_theta_context(
                 symbol=symbol,
@@ -178,73 +246,21 @@ class ThetaCollectorAgent:
                 f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} CSP: "
                 f"size_mult={size_multiplier:.2f}[/green]"
             )
-        # ──────────────────────────────────────────────────────────────
 
-        # ── Opportunity Scorer — greedy multiplier ─────────────────────
-        greedy_multiplier = 1.0
-        if self.opportunity_scorer is not None:
-            opp_ctx = {
-                "ivr": ivr, "vix": vix,
-                "ema_signal": "bullish",  # theta assumes bullish/neutral
-                "strategy": "theta",
-            }
-            open_syms = list(self.active_positions.keys())
-            greedy_multiplier = self.opportunity_scorer.score(
-                opp_ctx, open_positions=open_syms,
-                session_pnl=self.rm.daily_pnl,
-            )
-        # ──────────────────────────────────────────────────────────────
-
-        # Find target expiration (~30-45 DTE)
-        expiry_min = (date.today() + timedelta(days=TARGET_DTE_MIN)).isoformat()
-        expiry_max = (date.today() + timedelta(days=TARGET_DTE_MAX)).isoformat()
-
-        contracts = self.client.get_option_contracts(
-            symbol,
-            expiration_date_gte=expiry_min,
-            expiration_date_lte=expiry_max,
-            contract_type="put",
-        )
-
-        if not contracts:
-            log.info(f"[{symbol}] No put contracts found for target DTE range")
-            return None
-
-        # Find ~20 delta put (10% OTM)
-        target_strike = self.md.find_otm_strike(
-            symbol,
-            [c["strike"] for c in contracts],
-            option_type="put",
-            otm_pct=0.10,
-        )
-        contract = next((c for c in contracts if c["strike"] == target_strike), None)
-        if not contract:
-            return None
-
-        # Calculate premium via Black-Scholes (avoid fetching option as stock quote)
-        T = TARGET_DTE_MIN / 365
-        from core.options_pricer import black_scholes_price
-        premium = black_scholes_price(price, target_strike, T, RISK_FREE_RATE, hist_vol, "put")
-        if premium <= 0.01:
-            log.info(f"[{symbol}] Premium too low ({premium:.2f}), skipping")
-            return None
-
-        # ── Kelly Criterion sizing (hybrid multipliers) ────────────────────
-        notional = target_strike * 100
-        margin_requirement = notional * 0.20  # 20% margin for CSP
-
+        # ── 4. Final Kelly Sizing & Execution ─────────────────────────
         if self.kelly is not None:
-            # For short puts, "cost" = margin tied up; Kelly sizes on that
             n_contracts = self.kelly.get_contract_count(
                 strategy="theta",
                 equity=equity,
-                premium_per_contract=margin_requirement,  # margin as the "spend"
+                premium_per_contract=margin_requirement,
                 size_multiplier=size_multiplier,
                 greedy_multiplier=greedy_multiplier,
             )
         else:
             n_contracts = max(1, int((equity * 0.04) / max(margin_requirement, 1000)))
-        # ─────────────────────────────────────────────────────────────────
+
+        if n_contracts <= 0:
+            return None
 
         order_value = max(premium * 100 * n_contracts, margin_requirement * n_contracts * 0.10)
 
@@ -256,7 +272,7 @@ class ThetaCollectorAgent:
             is_option=True,
         )
 
-        # ── Smart limit order execution ────────────────────────────────────
+        # Smart limit order execution
         if self.executor is not None:
             result = self.executor.execute_option_order(contract["symbol"], n_contracts, "sell")
         else:

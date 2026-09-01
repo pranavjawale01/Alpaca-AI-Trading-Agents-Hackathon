@@ -134,6 +134,7 @@ class IVCrushAgent:
         equity = account["equity"]
         price = self.md.get_price(symbol)
 
+        # ── 1. Contracts & ATM Strike Feasibility (Zero LLM calls) ───
         # Get near-term options (7-14 DTE)
         expiry_min = (date.today() + timedelta(days=5)).isoformat()
         expiry_max = (date.today() + timedelta(days=14)).isoformat()
@@ -153,16 +154,49 @@ class IVCrushAgent:
         put = next((p for p in puts if p["strike"] == atm_strike), None)
 
         if not call or not put:
+            log.info(f"[{symbol}] ATM strike ${atm_strike} call/put missing")
             return None
 
-        # ── Condition 3: Hybrid LLM Council vote gate ─────────────────
+        # ── 2. Preliminary Kelly Sizing & Margin Check ────────────────
+        straddle_margin_per_contract = atm_strike * 100 * 0.20
+
+        if self.kelly is not None:
+            prelim_contracts = self.kelly.get_contract_count(
+                strategy="iv_crush",
+                equity=equity,
+                premium_per_contract=straddle_margin_per_contract,
+                size_multiplier=1.0,
+                greedy_multiplier=1.0,
+            )
+        else:
+            prelim_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
+
+        if prelim_contracts <= 0:
+            log.info(f"[{symbol}] Kelly preliminary sizing = 0 contracts, skipping")
+            return None
+
+        # ── 3. Opportunity Scorer — greedy multiplier ─────────────────
         hist_vol = self.md.estimate_historical_vol(symbol)
         ivr = min(hist_vol * 200, 100)
+        greedy_multiplier = 1.0
+        if self.opportunity_scorer is not None:
+            opp_ctx = {
+                "ivr": ivr,
+                "vix": self.rm.current_vix,
+                "ema_signal": "neutral",  # straddle is delta-neutral
+                "strategy": "iv_crush",
+            }
+            greedy_multiplier = self.opportunity_scorer.score(
+                opp_ctx,
+                open_positions=list(self.active_positions.keys()),
+                session_pnl=self.rm.daily_pnl,
+            )
+
+        # ── 4. LLM Council Vote Gate (Only runs after ALL math passes) ──
         size_multiplier = 1.0  # default if council disabled
+        consensus = None
         if self.council is not None:
-            # Retrieve days_to_earnings from the symbol's earnings event
-            # (we approximate from DTE of the options — earnings are within 5-14 DTE)
-            days_to_earnings = 2  # conservative mid-estimate; passed from _scan_earnings_entries
+            days_to_earnings = 2  # conservative mid-estimate
             ctx = SignalEnhancer.build_iv_crush_context(
                 symbol=symbol,
                 price=price,
@@ -190,27 +224,8 @@ class IVCrushAgent:
                 f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} straddle: "
                 f"size_mult={size_multiplier:.2f}[/green]"
             )
-        # ──────────────────────────────────────────────────────────────
 
-        # ── Opportunity Scorer — greedy multiplier ─────────────────────
-        greedy_multiplier = 1.0
-        if self.opportunity_scorer is not None:
-            opp_ctx = {
-                "ivr": ivr,
-                "vix": self.rm.current_vix,
-                "ema_signal": "neutral",  # straddle is delta-neutral
-                "strategy": "iv_crush",
-            }
-            greedy_multiplier = self.opportunity_scorer.score(
-                opp_ctx,
-                open_positions=list(self.active_positions.keys()),
-                session_pnl=self.rm.daily_pnl,
-            )
-        # ──────────────────────────────────────────────────────────────
-
-        # ── Kelly Criterion sizing ─────────────────────────────────────────
-        straddle_margin_per_contract = atm_strike * 100 * 0.20
-
+        # ── 5. Final Kelly Sizing & Execution ─────────────────────────
         if self.kelly is not None:
             n_contracts = self.kelly.get_contract_count(
                 strategy="iv_crush",
@@ -221,7 +236,9 @@ class IVCrushAgent:
             )
         else:
             n_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
-        # ─────────────────────────────────────────────────────────────────
+
+        if n_contracts <= 0:
+            return None
 
         # Risk gate — straddle margin requirement (~20% of underlying notional)
         straddle_margin = straddle_margin_per_contract * n_contracts

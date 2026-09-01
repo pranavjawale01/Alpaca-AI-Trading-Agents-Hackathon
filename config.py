@@ -23,28 +23,44 @@ ALPACA_BASE_URL: str = os.getenv(
 ALPACA_DATA_URL: str = "https://data.alpaca.markets"
 
 # ──────────────────────────────────────────────
-# LLM / AI Reasoning (Featherless, Groq, OpenRouter, or OpenAI)
-# Any OpenAI-compatible provider works. Free options: Groq (https://console.groq.com)
+# LLM / AI Reasoning (NVIDIA, Hugging Face, Groq, OpenRouter, Featherless, OpenAI)
+# Free options:
+#   - NVIDIA NIM (https://build.nvidia.com) -> free 1,000 credits, ultra-fast
+#   - Hugging Face (https://huggingface.co/settings/tokens) -> free serverless inference API
+#   - Groq (https://console.groq.com) -> free tier 30 RPM / 14,400 RPD
+#   - OpenRouter (https://openrouter.ai) -> free :free model endpoints
 # ──────────────────────────────────────────────
 FEATHERLESS_API_KEY: str = (
-    os.getenv("FEATHERLESS_API_KEY")
+    os.getenv("NVIDIA_API_KEY")
+    or os.getenv("HUGGINGFACE_API_KEY")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("HF_API_KEY")
+    or os.getenv("HUGGINGFACEHUB_API_TOKEN")
     or os.getenv("GROQ_API_KEY")
     or os.getenv("OPENROUTER_API_KEY")
+    or os.getenv("FEATHERLESS_API_KEY")
     or os.getenv("OPENAI_API_KEY")
     or ""
 )
 
 _default_base_url = "https://api.featherless.ai/v1"
-if os.getenv("GROQ_API_KEY") or "gsk_" in FEATHERLESS_API_KEY:
+_default_model = "meta-llama/Llama-3.1-8B-Instruct"
+
+if os.getenv("NVIDIA_API_KEY") or FEATHERLESS_API_KEY.startswith("nvapi-"):
+    _default_base_url = "https://integrate.api.nvidia.com/v1"
+    _default_model = "meta/llama-3.1-8b-instruct"
+elif os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY") or FEATHERLESS_API_KEY.startswith("hf_"):
+    _default_base_url = "https://api-inference.huggingface.co/v1"
+    _default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+elif os.getenv("GROQ_API_KEY") or FEATHERLESS_API_KEY.startswith("gsk_"):
     _default_base_url = "https://api.groq.com/openai/v1"
-elif os.getenv("OPENROUTER_API_KEY"):
+    _default_model = "llama-3.1-8b-instant"
+elif os.getenv("OPENROUTER_API_KEY") or FEATHERLESS_API_KEY.startswith("sk-or-"):
     _default_base_url = "https://openrouter.ai/api/v1"
+    _default_model = "meta-llama/llama-3.1-8b-instruct:free"
 
 FEATHERLESS_BASE_URL: str = os.getenv("FEATHERLESS_BASE_URL", _default_base_url)
-FEATHERLESS_MODEL: str = os.getenv(
-    "FEATHERLESS_MODEL",
-    "llama-3.1-8b-instant" if "groq.com" in FEATHERLESS_BASE_URL else "meta-llama/Llama-3.1-8B-Instruct",
-)
+FEATHERLESS_MODEL: str = os.getenv("FEATHERLESS_MODEL", _default_model)
 
 
 # ──────────────────────────────────────────────
@@ -125,15 +141,33 @@ class CouncilConfig:
     """
 
     # The three models that form the council.
-    # All must be available on your Featherless AI account.
+    # Automatically chooses free models tailored to the active provider.
     models: list = field(
         default_factory=lambda: (
             [
-                os.getenv("COUNCIL_MODEL_1", "openai/gpt-oss-120b"),
-                os.getenv("COUNCIL_MODEL_2", "groq/compound"),
-                os.getenv("COUNCIL_MODEL_3", "qwen/qwen3.6-27b"),
+                os.getenv("COUNCIL_MODEL_1", "meta/llama-3.1-8b-instruct"),
+                os.getenv("COUNCIL_MODEL_2", "mistralai/mistral-7b-instruct-v0.3"),
+                os.getenv("COUNCIL_MODEL_3", "deepseek-ai/deepseek-r1"),
             ]
-            if ("groq.com" in FEATHERLESS_BASE_URL or os.getenv("GROQ_API_KEY"))
+            if ("nvidia.com" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("nvapi-"))
+            else [
+                os.getenv("COUNCIL_MODEL_1", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+                os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.3"),
+                os.getenv("COUNCIL_MODEL_3", "Qwen/Qwen2.5-7B-Instruct"),
+            ]
+            if ("huggingface.co" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("hf_"))
+            else [
+                os.getenv("COUNCIL_MODEL_1", "llama-3.1-8b-instant"),
+                os.getenv("COUNCIL_MODEL_2", "llama-3.3-70b-versatile"),
+                os.getenv("COUNCIL_MODEL_3", "deepseek-r1-distill-llama-70b"),
+            ]
+            if ("groq.com" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("gsk_"))
+            else [
+                os.getenv("COUNCIL_MODEL_1", "meta-llama/llama-3.1-8b-instruct:free"),
+                os.getenv("COUNCIL_MODEL_2", "mistralai/mistral-7b-instruct:free"),
+                os.getenv("COUNCIL_MODEL_3", "qwen/qwen-2.5-7b-instruct:free"),
+            ]
+            if ("openrouter.ai" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("sk-or-"))
             else [
                 os.getenv("COUNCIL_MODEL_1", "meta-llama/Llama-3.1-8B-Instruct"),
                 os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.3"),
@@ -254,7 +288,7 @@ class HybridConfig:
 
     # Auto-pilot: minutes between trading sessions during market hours
     session_interval_minutes: int = int(
-        os.getenv("SESSION_INTERVAL_MINUTES", "60")
+        os.getenv("SESSION_INTERVAL_MINUTES", "10")
     )
 
     # Max effective Kelly fraction after all multipliers

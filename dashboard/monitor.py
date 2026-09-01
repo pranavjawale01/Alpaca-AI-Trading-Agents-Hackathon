@@ -225,7 +225,7 @@ def get_background_engine():
 
     def _auto_pilot_worker():
         hybrid = getattr(config, "HYBRID", None)
-        interval_secs = (getattr(hybrid, "session_interval_minutes", 60) if hybrid else 60) * 60
+        interval_secs = (getattr(hybrid, "session_interval_minutes", 10) if hybrid else 10) * 60
         last_executed_time = None
         while True:
             try:
@@ -1125,7 +1125,7 @@ if data_loaded:
             """, unsafe_allow_html=True)
         with e3:
             hybrid = getattr(config, "HYBRID", None)
-            interval_mins = getattr(hybrid, "session_interval_minutes", 60) if hybrid else 60
+            interval_mins = getattr(hybrid, "session_interval_minutes", 10) if hybrid else 10
             st.markdown(f"""
             <div class="metric-card" style="border-left: 4px solid #bc8cff;">
                 <div class="metric-label">Sessions Completed</div>

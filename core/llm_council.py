@@ -426,7 +426,8 @@ class LLMCouncil:
         color = tier_colors.get(conviction_tier, "white")
         cred_info = ""
         if cred_weights:
-            cred_info = f" | cred_weights={{{', '.join(f'{k.split('/')[-1]}: {v:.2f}' for k, v in cred_weights.items())}}}"
+            cred_items = [f"{k.split('/')[-1]}: {v:.2f}" for k, v in cred_weights.items()]
+            cred_info = f" | cred_weights={{{', '.join(cred_items)}}}"
         console.print(
             f"[{color}]Council: {action.upper()} | "
             f"score={net_score:+.3f} | tier={conviction_tier.upper()} | "

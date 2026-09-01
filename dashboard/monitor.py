@@ -37,7 +37,6 @@ if sys.stdout.encoding != "utf-8":
         pass
 
 import threading
-import requests
 from collections import deque
 import numpy as np
 import pandas as pd
@@ -218,16 +217,25 @@ def get_background_engine():
             try:
                 now = datetime.now(timezone.utc)
                 is_weekday = now.weekday() < 5  # Mon-Fri
-                # US regular market hours: 13:30 to 20:00 / 14:30 to 21:00 UTC
-                is_market_hours = (13 <= now.hour <= 21) if is_weekday else False
+                # US regular market hours (approx, UTC): 13:30–21:00
+                market_open = now.replace(hour=13, minute=30, second=0, microsecond=0)
+                market_close = now.replace(hour=21, minute=0, second=0, microsecond=0)
+                is_market_hours = is_weekday and (market_open <= now <= market_close)
 
                 time_since_last = (now - last_executed_time).total_seconds() if last_executed_time else interval_secs + 1
                 
-                if is_market_hours and time_since_last >= interval_secs and not engine_state["is_busy"]:
-                    with engine_lock:
+                should_run = False
+                with engine_lock:
+                    should_run = (
+                        is_market_hours
+                        and time_since_last >= interval_secs
+                        and not engine_state["is_busy"]
+                    )
+                    if should_run:
                         engine_state["is_busy"] = True
                         engine_state["status"] = "EXECUTING SESSION..."
-                    
+
+                if should_run:
                     try:
                         orch = Orchestrator()
                         summary = orch.run_session()

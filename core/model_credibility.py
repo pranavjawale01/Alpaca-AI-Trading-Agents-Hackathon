@@ -116,16 +116,24 @@ class ModelCredibilityTracker:
         if not votes:
             return
 
+        def _safe_float(val: Any, default: float = 0.0) -> float:
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+
         records: list[tuple[int, str, str, float]] = []
         for v in votes:
             if isinstance(v, dict):
                 model_name = str(v.get("model") or v.get("model_name") or "unknown")
                 action = str(v.get("action", "")).lower()
-                confidence = float(v.get("confidence", 0.0))
+                confidence = _safe_float(v.get("confidence"), 0.0)
             else:
                 model_name = str(getattr(v, "model", getattr(v, "model_name", "unknown")))
                 action = str(getattr(v, "action", "")).lower()
-                confidence = float(getattr(v, "confidence", 0.0))
+                confidence = _safe_float(getattr(v, "confidence", 0.0), 0.0)
             records.append((trade_id, model_name, action, confidence))
 
         conn = self._connect()

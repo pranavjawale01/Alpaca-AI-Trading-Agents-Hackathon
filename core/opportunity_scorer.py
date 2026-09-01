@@ -79,6 +79,7 @@ class OpportunityScorer:
         market_context: dict[str, Any],
         open_positions: Optional[list[str]] = None,
         session_pnl: float = 0.0,
+        verbose: bool = False,
     ) -> float:
         """
         Compute greedy multiplier [1.0, max_greedy_multiplier] for position sizing.
@@ -94,6 +95,7 @@ class OpportunityScorer:
                             - 'strategy' (str: 'theta'/'momo'/'iv_crush')
             open_positions: List of ticker symbols currently in the portfolio.
             session_pnl: Realised/unrealised session P&L in USD.
+            verbose: If True, prints formatted multi-line criteria tree to console.
 
         Returns:
             Float multiplier in [1.0, max_greedy_multiplier].
@@ -256,23 +258,24 @@ class OpportunityScorer:
         )
 
         sym_tag = f" [{symbol}]" if symbol else ""
-        console.print(f"[bold cyan]┌─ Opportunity Scorer{sym_tag} ─────────────────────────────[/bold cyan]")
-        for c in criteria_results:
-            if c["fired"]:
-                console.print(
-                    f"[bold cyan]│[/bold cyan]  [bold green]✓[/bold green] [white]{c['name']:<30}[/white] "
-                    f"[green]+{c['boost']:.2f}[/green]  [dim]({c['detail']})[/dim]"
-                )
-            else:
-                console.print(
-                    f"[bold cyan]│[/bold cyan]  [dim red]✗[/dim red] [dim]{c['name']:<30}[/dim] "
-                    f"[dim]+0.00  ({c['detail']})[/dim]"
-                )
+        if verbose or log.isEnabledFor(logging.DEBUG):
+            console.print(f"[bold cyan]┌─ Opportunity Scorer{sym_tag} ─────────────────────────────[/bold cyan]")
+            for c in criteria_results:
+                if c["fired"]:
+                    console.print(
+                        f"[bold cyan]│[/bold cyan]  [bold green]✓[/bold green] [white]{c['name']:<30}[/white] "
+                        f"[green]+{c['boost']:.2f}[/green]  [dim]({c['detail']})[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"[bold cyan]│[/bold cyan]  [dim red]✗[/dim red] [dim]{c['name']:<30}[/dim] "
+                        f"[dim]+0.00  ({c['detail']})[/dim]"
+                    )
 
-        status_color = "bold green" if final_multiplier > 1.0 else "bold yellow"
-        console.print(
-            f"[bold cyan]└─ Multiplier:[/bold cyan] [{status_color}]{final_multiplier:.2f}x[/{status_color}] "
-            f"[dim](Base: 1.00 + Boost: {total_boost:.2f} → Cap: {self.max_greedy_multiplier:.2f}x)[/dim]"
-        )
+            status_color = "bold green" if final_multiplier > 1.0 else "bold yellow"
+            console.print(
+                f"[bold cyan]└─ Multiplier:[/bold cyan] [{status_color}]{final_multiplier:.2f}x[/{status_color}] "
+                f"[dim](Base: 1.00 + Boost: {total_boost:.2f} → Cap: {self.max_greedy_multiplier:.2f}x)[/dim]"
+            )
 
         return final_multiplier

@@ -188,7 +188,7 @@ class CouncilConfig:
     enabled: bool = os.getenv("COUNCIL_ENABLED", "true").lower() == "true"
 
     # Per-model query timeout in seconds (models queried in parallel).
-    timeout_seconds: float = float(os.getenv("COUNCIL_TIMEOUT", "10.0"))
+    timeout_seconds: float = float(os.getenv("COUNCIL_TIMEOUT", "25.0"))
 
 
 COUNCIL = CouncilConfig()

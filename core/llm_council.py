@@ -268,26 +268,35 @@ class LLMCouncil:
         """Query all models in parallel, collect votes with timeout."""
         votes: list[ModelVote] = []
 
-        with ThreadPoolExecutor(max_workers=len(self.models)) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, len(self.models))) as pool:
             futures = {
                 pool.submit(self._query_model, model, context_str, strategy): model
                 for model in self.models
             }
-            for future in as_completed(futures, timeout=self.timeout + 2):
-                model = futures[future]
-                try:
-                    vote = future.result(timeout=self.timeout)
-                    votes.append(vote)
-                    log.debug(
-                        f"[{symbol}] {model}: {vote.action} "
-                        f"(conf={vote.confidence:.2f})"
-                    )
-                except TimeoutError:
+            completed_models = set()
+            try:
+                for future in as_completed(futures, timeout=self.timeout + 2):
+                    model = futures[future]
+                    completed_models.add(model)
+                    try:
+                        vote = future.result()
+                        votes.append(vote)
+                        log.debug(
+                            f"[{symbol}] {model}: {vote.action} "
+                            f"(conf={vote.confidence:.2f})"
+                        )
+                    except Exception as exc:
+                        log.warning(f"[{symbol}] {model} error ({exc}) — casting hold")
+                        votes.append(self._error_vote(model, str(exc)))
+            except TimeoutError:
+                log.warning(f"[{symbol}] Council gathering timed out after {self.timeout}s")
+
+            # Cast timeout votes for any models that did not finish within timeout
+            for future, model in futures.items():
+                if model not in completed_models:
+                    future.cancel()
                     log.warning(f"[{symbol}] {model} timed out — casting hold")
                     votes.append(self._timeout_vote(model))
-                except Exception as exc:
-                    log.warning(f"[{symbol}] {model} error ({exc}) — casting hold")
-                    votes.append(self._error_vote(model, str(exc)))
 
         return votes
 

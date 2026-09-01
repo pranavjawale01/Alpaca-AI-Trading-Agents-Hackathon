@@ -239,27 +239,30 @@ def get_background_engine():
                     try:
                         orch = Orchestrator()
                         summary = orch.run_session()
-                        engine_state["last_run"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-                        engine_state["last_regime"] = summary.get("regime", "neutral").upper()
-                        engine_state["last_pnl"] = summary.get("daily_pnl", 0.0)
-                        engine_state["runs_count"] += 1
-                        session_logs.appendleft({
-                            "time": engine_state["last_run"],
-                            "type": "AUTO_PILOT",
-                            "regime": engine_state["last_regime"],
-                            "pnl": engine_state["last_pnl"],
-                            "actions": summary.get("actions_taken", 0),
-                            "details": summary.get("actions", []),
-                        })
+                        with engine_lock:
+                            engine_state["last_run"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+                            engine_state["last_regime"] = summary.get("regime", "neutral").upper()
+                            engine_state["last_pnl"] = summary.get("daily_pnl", 0.0)
+                            engine_state["runs_count"] += 1
+                            session_logs.appendleft({
+                                "time": engine_state["last_run"],
+                                "type": "AUTO_PILOT",
+                                "regime": engine_state["last_regime"],
+                                "pnl": engine_state["last_pnl"],
+                                "actions": summary.get("actions_taken", 0),
+                                "details": summary.get("actions", []),
+                            })
                         last_executed_time = now
                     except Exception as exc:
-                        engine_state["last_error"] = str(exc)
+                        with engine_lock:
+                            engine_state["last_error"] = str(exc)
                     finally:
                         with engine_lock:
                             engine_state["is_busy"] = False
                             engine_state["status"] = "RUNNING (Market Scheduler)"
             except Exception as e:
-                pass
+                with engine_lock:
+                    engine_state["last_error"] = str(e)
             time.sleep(30)
 
     thread = threading.Thread(target=_auto_pilot_worker, daemon=True, name="CacheMeAutoPilot")
@@ -308,18 +311,19 @@ with st.sidebar:
                 
                 # Update shared state
                 now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-                bg_state["last_run"] = now_str
-                bg_state["last_regime"] = summary.get("regime", "neutral").upper()
-                bg_state["last_pnl"] = pnl
-                bg_state["runs_count"] += 1
-                bg_logs.appendleft({
-                    "time": now_str,
-                    "type": "MANUAL_TRIGGER",
-                    "regime": bg_state["last_regime"],
-                    "pnl": pnl,
-                    "actions": summary.get("actions_taken", 0),
-                    "details": summary.get("actions", []),
-                })
+                with bg_lock:
+                    bg_state["last_run"] = now_str
+                    bg_state["last_regime"] = summary.get("regime", "neutral").upper()
+                    bg_state["last_pnl"] = pnl
+                    bg_state["runs_count"] += 1
+                    bg_logs.appendleft({
+                        "time": now_str,
+                        "type": "MANUAL_TRIGGER",
+                        "regime": bg_state["last_regime"],
+                        "pnl": pnl,
+                        "actions": summary.get("actions_taken", 0),
+                        "details": summary.get("actions", []),
+                    })
                 st.rerun()
             except Exception as e:
                 st.error(f"Trading session error: {e}")

@@ -169,6 +169,9 @@ class LLMCouncil:
         # Credibility tracker — set externally by Orchestrator after init
         self._credibility_tracker = None
 
+        # Track last gathered votes
+        self._last_votes: list[ModelVote] = []
+
         self._client: Optional[OpenAI] = None
         self._available = False
 
@@ -347,6 +350,7 @@ class LLMCouncil:
           3. Determine conviction tier based on current VIX regime thresholds
           4. Assign size_multiplier for downstream Kelly sizing
         """
+        self._last_votes = list(votes) if votes else []
         if not votes:
             return ConsensusResult(
                 action="hold", net_score=0.0, agreed=False,

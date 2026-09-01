@@ -171,7 +171,13 @@ class MomoBreakoutAgent:
                         )
                     # ──────────────────────────────────────────────────
 
-                    action = self._buy_call(symbol, equity, size_multiplier=size_multiplier, greedy_multiplier=greedy_multiplier)
+                    votes_list = consensus.votes if (self.council and consensus) else []
+                    action = self._buy_call(
+                        symbol, equity,
+                        size_multiplier=size_multiplier,
+                        greedy_multiplier=greedy_multiplier,
+                        votes=votes_list,
+                    )
                     if action:
                         actions.append(action)
 
@@ -188,6 +194,7 @@ class MomoBreakoutAgent:
         equity: float,
         size_multiplier: float = 1.0,
         greedy_multiplier: float = 1.0,
+        votes: Optional[list] = None,
     ) -> Optional[dict]:
         """Buy OTM call using Kelly-sized position and mid-price limit order."""
         expiry_min = (date.today() + timedelta(days=28)).isoformat()
@@ -264,7 +271,7 @@ class MomoBreakoutAgent:
         }
         self._peak_plpc[symbol] = 0.0  # initialise trailing stop tracker
 
-        # ── Journal: log entry ─────────────────────────────────────
+        # ── Journal & Credibility: log entry ───────────────────────
         if self.journal is not None:
             trade_id = self.journal.log_entry(
                 agent="MomoBreakout",
@@ -277,7 +284,9 @@ class MomoBreakoutAgent:
             )
             self.active_positions[symbol]["journal_id"] = trade_id
             if self.council is not None and getattr(self.council, "_credibility_tracker", None):
-                self.council._credibility_tracker.record_votes(trade_id, [v.__dict__ if hasattr(v, '__dict__') else v for v in getattr(self.council, '_last_votes', [])])
+                target_votes = votes if votes is not None else getattr(self.council, "_last_votes", [])
+                if target_votes:
+                    self.council._credibility_tracker.record_votes(trade_id, target_votes)
         # ─────────────────────────────────────────────────────────
 
         console.print(

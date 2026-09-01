@@ -7,8 +7,6 @@ EMA logic, VIX sweet spots, IVR thresholds, and edge cases.
 
 from __future__ import annotations
 
-import pytest
-
 from core.opportunity_scorer import OpportunityScorer
 
 

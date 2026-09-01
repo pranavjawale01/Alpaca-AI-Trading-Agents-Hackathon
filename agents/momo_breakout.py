@@ -276,6 +276,8 @@ class MomoBreakoutAgent:
                 entry_price=est_premium,
             )
             self.active_positions[symbol]["journal_id"] = trade_id
+            if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                self.council._credibility_tracker.record_votes(trade_id, [v.__dict__ if hasattr(v, '__dict__') else v for v in getattr(self.council, '_last_votes', [])])
         # ─────────────────────────────────────────────────────────
 
         console.print(
@@ -343,10 +345,12 @@ class MomoBreakoutAgent:
                 else:
                     self.client.place_option_market_order(contract_sym, meta["qty"], "sell")
 
-                # ── Journal: log exit ──────────────────────────────────
+                # ── Journal & Credibility: log exit ────────────────────
                 if self.journal is not None and "journal_id" in meta:
                     exit_price = meta["entry_premium"] * (1 + plpc)
                     self.journal.log_exit(meta["journal_id"], exit_price, reason)
+                    if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                        self.council._credibility_tracker.update_credibility(meta["journal_id"], plpc > 0)
                 # ──────────────────────────────────────────────────────
 
                 del self.active_positions[symbol]

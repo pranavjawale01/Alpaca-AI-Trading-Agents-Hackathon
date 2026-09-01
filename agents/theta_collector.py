@@ -296,6 +296,8 @@ class ThetaCollectorAgent:
                 entry_price=premium,
             )
             self.active_positions[symbol]["journal_id"] = trade_id
+            if self.council is not None and getattr(self.council, "_credibility_tracker", None) and hasattr(consensus, "votes"):
+                self.council._credibility_tracker.record_votes(trade_id, consensus.votes)
         # ─────────────────────────────────────────────────────────────────
 
         console.print(
@@ -323,6 +325,8 @@ class ThetaCollectorAgent:
                 console.print(f"[green][EXPIRED] {symbol} CSP expired worthless (max profit)[/green]")
                 if self.journal is not None and "journal_id" in meta:
                     self.journal.log_exit(meta["journal_id"], 0.0, "expired_worthless")
+                    if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                        self.council._credibility_tracker.update_credibility(meta["journal_id"], True)
                 del self.active_positions[symbol]
                 actions.append({"agent": "ThetaCollector", "action": "expired_worthless", "symbol": symbol})
                 continue
@@ -353,11 +357,13 @@ class ThetaCollectorAgent:
                 self.client.place_option_market_order(contract_symbol, qty, "buy")
             # ─────────────────────────────────────────────────────────────
 
-            # ── Journal: log exit ──────────────────────────────────────────
+            # ── Journal & Credibility: log exit ────────────────────────────
             if self.journal is not None and "journal_id" in meta:
                 # For short put: current cost = entry × (1 - profit_pct)
                 exit_price = meta["entry_premium"] * (1 - profit_pct)
                 self.journal.log_exit(meta["journal_id"], exit_price, reason)
+                if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                    self.council._credibility_tracker.update_credibility(meta["journal_id"], profit_pct > 0)
             # ─────────────────────────────────────────────────────────────
 
             del self.active_positions[symbol]

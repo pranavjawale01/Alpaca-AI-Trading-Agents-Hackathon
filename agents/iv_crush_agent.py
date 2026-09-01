@@ -270,6 +270,8 @@ class IVCrushAgent:
                 entry_price=est_combined_premium,
             )
             self.active_positions[symbol]["journal_id"] = trade_id
+            if self.council is not None and getattr(self.council, "_credibility_tracker", None) and hasattr(consensus, "votes"):
+                self.council._credibility_tracker.record_votes(trade_id, consensus.votes)
         # ─────────────────────────────────────────────────────────────────
 
         console.print(
@@ -292,6 +294,8 @@ class IVCrushAgent:
                 console.print(f"[green][EXPIRED] {symbol} straddle expired (max profit)[/green]")
                 if self.journal is not None and "journal_id" in meta:
                     self.journal.log_exit(meta["journal_id"], 0.0, "expired_worthless")
+                    if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                        self.council._credibility_tracker.update_credibility(meta["journal_id"], True)
                 del self.active_positions[symbol]
                 continue
 

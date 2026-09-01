@@ -49,8 +49,8 @@ _default_model = "meta-llama/Llama-3.1-8B-Instruct"
 if os.getenv("NVIDIA_API_KEY") or FEATHERLESS_API_KEY.startswith("nvapi-"):
     _default_base_url = "https://integrate.api.nvidia.com/v1"
     _default_model = "meta/llama-3.1-8b-instruct"
-elif os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY") or FEATHERLESS_API_KEY.startswith("hf_"):
-    _default_base_url = "https://api-inference.huggingface.co/v1"
+elif os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or FEATHERLESS_API_KEY.startswith("hf_"):
+    _default_base_url = "https://router.huggingface.co/hf-inference/v1"
     _default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 elif os.getenv("GROQ_API_KEY") or FEATHERLESS_API_KEY.startswith("gsk_"):
     _default_base_url = "https://api.groq.com/openai/v1"

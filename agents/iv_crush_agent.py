@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from core.kelly_sizer import KellySizer
     from core.smart_executor import SmartExecutor
     from core.trade_journal import TradeJournal
+    from core.opportunity_scorer import OpportunityScorer
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -52,8 +53,8 @@ class IVCrushAgent:
     High-probability income strategy in calm markets.
 
     Pro improvements:
-      1. LLM Council: assesses earnings IV + timing before each straddle
-      2. Kelly Criterion: sizes straddle to historical win rate
+      1. LLM Council: assesses earnings IV + timing before each straddle (hybrid tiers)
+      2. Kelly Criterion: sizes straddle to historical win rate with greedy multiplier
       3. SmartExecutor: mid-price fills on both legs
       4. TradeJournal: logs entry/exit for adaptive sizing
     """
@@ -67,6 +68,7 @@ class IVCrushAgent:
         kelly_sizer: Optional["KellySizer"] = None,
         smart_executor: Optional["SmartExecutor"] = None,
         journal: Optional["TradeJournal"] = None,
+        opportunity_scorer=None,
     ) -> None:
         self.client = client
         self.md = market_data
@@ -75,6 +77,7 @@ class IVCrushAgent:
         self.kelly = kelly_sizer
         self.executor = smart_executor
         self.journal = journal
+        self.opportunity_scorer = opportunity_scorer
         self.active_positions: dict[str, dict] = {}
 
         console.print("[bold magenta]IVCrushAgent initialised[/bold magenta]")
@@ -152,10 +155,11 @@ class IVCrushAgent:
         if not call or not put:
             return None
 
-        # ── LLM Council vote gate ──────────────────────────────────────
+        # ── Condition 3: Hybrid LLM Council vote gate ─────────────────
+        hist_vol = self.md.estimate_historical_vol(symbol)
+        ivr = min(hist_vol * 200, 100)
+        size_multiplier = 1.0  # default if council disabled
         if self.council is not None:
-            hist_vol = self.md.estimate_historical_vol(symbol)
-            ivr = min(hist_vol * 200, 100)
             # Retrieve days_to_earnings from the symbol's earnings event
             # (we approximate from DTE of the options — earnings are within 5-14 DTE)
             days_to_earnings = 2  # conservative mid-estimate; passed from _scan_earnings_entries
@@ -170,19 +174,39 @@ class IVCrushAgent:
             )
             consensus = self.council.vote(symbol, ctx, strategy="iv_crush_straddle")
             console.print(consensus.summary())
-            if not consensus.agreed:
+            if consensus.conviction_tier == "veto":
                 console.print(
-                    f"[yellow][COUNCIL VETO] {symbol} straddle: "
-                    f"score={consensus.net_score:+.3f} (threshold={consensus.threshold}). "
-                    f"Dissenting: {consensus.dissenting_models or 'none (all hold)'}[/yellow]"
+                    f"[red][COUNCIL VETO] {symbol} straddle: "
+                    f"score={consensus.net_score:+.3f} | tier=VETO | "
+                    f"regime threshold not met[/red]"
                 )
                 log.info(
                     f"[{symbol}] Council vetoed straddle entry: "
-                    f"score={consensus.net_score:+.3f} | "
-                    f"votes={[(v.model.split('/')[-1], v.action, v.confidence) for v in consensus.votes]}"
+                    f"score={consensus.net_score:+.3f} | tier=VETO"
                 )
                 return None
-        # ────────────────────────────────────────────────────────────────
+            size_multiplier = consensus.size_multiplier
+            console.print(
+                f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} straddle: "
+                f"size_mult={size_multiplier:.2f}[/green]"
+            )
+        # ──────────────────────────────────────────────────────────────
+
+        # ── Opportunity Scorer — greedy multiplier ─────────────────────
+        greedy_multiplier = 1.0
+        if self.opportunity_scorer is not None:
+            opp_ctx = {
+                "ivr": ivr,
+                "vix": self.rm.current_vix,
+                "ema_signal": "neutral",  # straddle is delta-neutral
+                "strategy": "iv_crush",
+            }
+            greedy_multiplier = self.opportunity_scorer.score(
+                opp_ctx,
+                open_positions=list(self.active_positions.keys()),
+                session_pnl=self.rm.daily_pnl,
+            )
+        # ──────────────────────────────────────────────────────────────
 
         # ── Kelly Criterion sizing ─────────────────────────────────────────
         straddle_margin_per_contract = atm_strike * 100 * 0.20
@@ -192,6 +216,8 @@ class IVCrushAgent:
                 strategy="iv_crush",
                 equity=equity,
                 premium_per_contract=straddle_margin_per_contract,
+                size_multiplier=size_multiplier,
+                greedy_multiplier=greedy_multiplier,
             )
         else:
             n_contracts = max(1, int((equity * 0.03) / (atm_strike * 100)))
@@ -224,6 +250,9 @@ class IVCrushAgent:
             "put_contract": put["symbol"],
             "qty": n_contracts,
             "expiration": call["expiration"],
+            "conviction_tier": consensus.conviction_tier if self.council else "bypass",
+            "size_multiplier": size_multiplier,
+            "greedy_multiplier": greedy_multiplier,
         }
         self.active_positions[symbol] = action
 
@@ -241,6 +270,8 @@ class IVCrushAgent:
                 entry_price=est_combined_premium,
             )
             self.active_positions[symbol]["journal_id"] = trade_id
+            if self.council is not None and getattr(self.council, "_credibility_tracker", None) and hasattr(consensus, "votes"):
+                self.council._credibility_tracker.record_votes(trade_id, consensus.votes)
         # ─────────────────────────────────────────────────────────────────
 
         console.print(
@@ -263,6 +294,8 @@ class IVCrushAgent:
                 console.print(f"[green][EXPIRED] {symbol} straddle expired (max profit)[/green]")
                 if self.journal is not None and "journal_id" in meta:
                     self.journal.log_exit(meta["journal_id"], 0.0, "expired_worthless")
+                    if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                        self.council._credibility_tracker.update_credibility(meta["journal_id"], True)
                 del self.active_positions[symbol]
                 continue
 

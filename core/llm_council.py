@@ -62,13 +62,16 @@ class ConsensusResult:
     net_score: float      # weighted average score in [-1, +1]
     agreed: bool          # True if |net_score| >= threshold
     threshold: float      # the threshold used
+    conviction_tier: str = "veto"         # "strong" | "moderate" | "pilot" | "veto"
+    size_multiplier: float = 0.0          # 1.0 (strong), 0.70 (moderate), 0.40 (pilot), 0.0 (veto)
     votes: list[ModelVote] = field(default_factory=list)
     dissenting_models: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         lines = [
             f"Council verdict: {self.action.upper()} | "
-            f"score={self.net_score:+.3f} | agreed={self.agreed}",
+            f"score={self.net_score:+.3f} | tier={self.conviction_tier.upper()} | "
+            f"size_mult={self.size_multiplier:.2f} | agreed={self.agreed}",
         ]
         for v in self.votes:
             marker = "[AGREE]" if v.action == self.action else "[DISSENT]"
@@ -123,10 +126,31 @@ class LLMCouncil:
     """
     Three-model voting council for high-conviction trade signal filtering.
 
+    Hybrid greedy-voting features:
+      - Credibility-weighted votes: models with better track records vote louder
+      - Regime-adaptive thresholds: relaxed in bull markets, strict in panic
+      - Conviction tiers: STRONG/MODERATE/PILOT instead of binary pass/fail
+      - Pilot positions: weak consensus still trades at reduced size
+
     All three models are queried **in parallel** (ThreadPoolExecutor) to keep
     latency similar to a single model call. If a model times out or errors,
     it casts a 'hold' vote at zero confidence (neutral, does not block trade).
     """
+
+    # Regime-adaptive threshold map
+    _REGIME_THRESHOLDS = {
+        "risk_on":  {"strong": 0.55, "moderate": 0.40, "pilot": 0.25},
+        "neutral":  {"strong": 0.65, "moderate": 0.50, "pilot": 0.35},
+        "risk_off": {"strong": 0.80, "moderate": 0.65, "pilot": 0.50},
+    }
+
+    # Size multipliers per conviction tier
+    _TIER_MULTIPLIERS = {
+        "strong":   1.00,
+        "moderate": 0.70,
+        "pilot":    0.40,
+        "veto":     0.00,
+    }
 
     def __init__(
         self,
@@ -139,6 +163,15 @@ class LLMCouncil:
         self.timeout = timeout if timeout is not None else config.COUNCIL.timeout_seconds
         self.enabled = config.COUNCIL.enabled
 
+        # Current VIX regime — updated by Orchestrator before each session
+        self._current_regime: str = "neutral"
+
+        # Credibility tracker — set externally by Orchestrator after init
+        self._credibility_tracker = None
+
+        # Track last gathered votes
+        self._last_votes: list[ModelVote] = []
+
         self._client: Optional[OpenAI] = None
         self._available = False
 
@@ -150,8 +183,8 @@ class LLMCouncil:
                 )
                 self._available = True
                 console.print(
-                    f"[bold green]LLMCouncil initialised | "
-                    f"{len(self.models)} models | threshold={self.threshold:.2f}[/bold green]"
+                    f"[bold green]LLMCouncil initialised (HYBRID MODE) | "
+                    f"{len(self.models)} models | base_threshold={self.threshold:.2f}[/bold green]"
                 )
                 for m in self.models:
                     console.print(f"  [dim]• {m}[/dim]")
@@ -162,6 +195,15 @@ class LLMCouncil:
                 "[yellow]LLMCouncil: No FEATHERLESS_API_KEY — "
                 "council disabled, all signals pass through[/yellow]"
             )
+
+    def set_regime(self, regime: str) -> None:
+        """Update the VIX regime for adaptive threshold selection."""
+        self._current_regime = regime
+        log.info(f"[Council] Regime set to: {regime}")
+
+    def set_credibility_tracker(self, tracker) -> None:
+        """Inject the ModelCredibilityTracker for weighted voting."""
+        self._credibility_tracker = tracker
 
     # ──────────────────────────────────────────
     # Public API
@@ -189,6 +231,7 @@ class LLMCouncil:
             return ConsensusResult(
                 action="buy", net_score=1.0, agreed=True,
                 threshold=self.threshold,
+                conviction_tier="strong", size_multiplier=1.0,
                 votes=[], dissenting_models=[],
             )
 
@@ -298,26 +341,72 @@ class LLMCouncil:
     def _tally_votes(
         self, votes: list[ModelVote], strategy: str
     ) -> ConsensusResult:
-        """Apply confidence-weighted majority vote formula."""
+        """
+        Apply credibility-weighted majority vote with regime-adaptive tiers.
+
+        Hybrid scoring:
+          1. Weight each model's vote by its credibility score
+          2. Compute weighted average score in [-1, +1]
+          3. Determine conviction tier based on current VIX regime thresholds
+          4. Assign size_multiplier for downstream Kelly sizing
+        """
+        self._last_votes = list(votes) if votes else []
         if not votes:
             return ConsensusResult(
                 action="hold", net_score=0.0, agreed=False,
-                threshold=self.threshold, votes=[], dissenting_models=[],
+                threshold=self.threshold,
+                conviction_tier="veto", size_multiplier=0.0,
+                votes=[], dissenting_models=[],
             )
 
-        # Weighted sum: buy=+1, hold=0, sell=-1, each scaled by confidence
-        total_score = sum(v.score for v in votes)
-        net_score = total_score / len(votes)  # normalised to [-1, +1]
+        # Get credibility weights (default 1.0 for all models if no tracker)
+        cred_weights = {}
+        if self._credibility_tracker is not None:
+            try:
+                cred_weights = self._credibility_tracker.get_weights()
+            except Exception as exc:
+                log.warning(f"Credibility tracker error: {exc}")
+
+        # Credibility-weighted score: Σ(w_i × confidence_i × vote_i) / Σ(w_i)
+        total_weighted_score = 0.0
+        total_weight = 0.0
+        for v in votes:
+            w = cred_weights.get(v.model, 1.0)
+            total_weighted_score += w * v.score
+            total_weight += w
+
+        net_score = total_weighted_score / total_weight if total_weight > 0 else 0.0
+
+        # Get regime-adaptive thresholds
+        regime_thresholds = self._REGIME_THRESHOLDS.get(
+            self._current_regime,
+            self._REGIME_THRESHOLDS["neutral"]
+        )
+
+        abs_score = abs(net_score)
+
+        # Determine conviction tier
+        if abs_score >= regime_thresholds["strong"]:
+            conviction_tier = "strong"
+        elif abs_score >= regime_thresholds["moderate"]:
+            conviction_tier = "moderate"
+        elif abs_score >= regime_thresholds["pilot"]:
+            conviction_tier = "pilot"
+        else:
+            conviction_tier = "veto"
+
+        size_multiplier = self._TIER_MULTIPLIERS[conviction_tier]
+        agreed = conviction_tier != "veto"
 
         # Determine winning action
-        if net_score >= self.threshold:
+        if conviction_tier == "veto":
+            action = "hold"
+        elif net_score > 0:
             action = "buy"
-        elif net_score <= -self.threshold:
+        elif net_score < 0:
             action = "sell"
         else:
             action = "hold"
-
-        agreed = abs(net_score) >= self.threshold
 
         # Find dissenting models
         dissenting = [
@@ -329,16 +418,25 @@ class LLMCouncil:
             action=action,
             net_score=net_score,
             agreed=agreed,
-            threshold=self.threshold,
+            threshold=regime_thresholds.get("moderate", self.threshold),
+            conviction_tier=conviction_tier,
+            size_multiplier=size_multiplier,
             votes=votes,
             dissenting_models=dissenting,
         )
 
         # Pretty-print to console
-        score_color = "green" if agreed else "yellow"
+        tier_colors = {"strong": "green", "moderate": "yellow", "pilot": "cyan", "veto": "red"}
+        color = tier_colors.get(conviction_tier, "white")
+        cred_info = ""
+        if cred_weights:
+            cred_items = [f"{k.split('/')[-1]}: {v:.2f}" for k, v in cred_weights.items()]
+            cred_info = f" | cred_weights={{{', '.join(cred_items)}}}"
         console.print(
-            f"[{score_color}]Council: {action.upper()} | "
-            f"score={net_score:+.3f} | agreed={agreed}[/{score_color}]"
+            f"[{color}]Council: {action.upper()} | "
+            f"score={net_score:+.3f} | tier={conviction_tier.upper()} | "
+            f"size_mult={size_multiplier:.2f} | regime={self._current_regime}"
+            f"{cred_info}[/{color}]"
         )
 
         return result

@@ -82,6 +82,8 @@ class KellySizer:
         strategy: str,
         equity: float,
         override_max_pct: Optional[float] = None,
+        size_multiplier: float = 1.0,
+        greedy_multiplier: float = 1.0,
     ) -> float:
         """
         Compute optimal dollar position size for a strategy.
@@ -91,6 +93,10 @@ class KellySizer:
             equity: Current portfolio equity in USD
             override_max_pct: Hard cap on position size (fraction of equity).
                               Falls back to config.RISK.max_position_pct if None.
+            size_multiplier: Council conviction tier multiplier (0.40–1.00).
+                             From HybridConsensusResult.
+            greedy_multiplier: Opportunity score multiplier (1.0–2.0).
+                               From OpportunityScorer.
 
         Returns:
             Dollar amount to risk on this trade (USD).
@@ -99,16 +105,25 @@ class KellySizer:
         max_pct = override_max_pct or config.RISK.max_position_pct
         hard_cap_dollars = equity * max_pct
 
+        # Compute effective Kelly fraction with hybrid multipliers
+        effective_kelly = self.kelly_fraction * size_multiplier * greedy_multiplier
+        max_kelly = config.HYBRID.max_kelly_fraction
+        effective_kelly = min(effective_kelly, max_kelly)
+
+        if size_multiplier <= 0.0:
+            return 0.0
+
         stats = self.journal.get_strategy_stats(strategy)
         n = stats.get("n_trades", 0)
 
         if n < _MIN_KELLY_TRADES:
-            # Not enough history — use conservative defaults
+            # Not enough history — use conservative defaults, still apply multipliers
             default_pct = _DEFAULT_PCT_BY_STRATEGY.get(strategy, _DEFAULT_PCT_BY_STRATEGY["default"])
-            size = equity * default_pct
+            adjusted_pct = min(default_pct * size_multiplier * greedy_multiplier, max_kelly)
+            size = equity * adjusted_pct
             log.info(
                 f"[KellySizer][{strategy}] Only {n} trades < {_MIN_KELLY_TRADES} minimum. "
-                f"Using default {default_pct*100:.1f}% → ${size:,.0f}"
+                f"Using default {default_pct*100:.1f}% × {size_multiplier:.2f} × {greedy_multiplier:.2f} (capped at {max_kelly*100:.1f}%) → ${size:,.0f}"
             )
             return min(size, hard_cap_dollars)
 
@@ -136,8 +151,8 @@ class KellySizer:
             )
             return equity * 0.003  # minimum 0.3% — keep skin in the game
 
-        # Apply fractional Kelly (quarter-Kelly by default)
-        fractional_kelly_pct = raw_kelly * self.kelly_fraction
+        # Apply fractional Kelly with hybrid multipliers
+        fractional_kelly_pct = raw_kelly * effective_kelly
 
         size = equity * fractional_kelly_pct
         size = min(size, hard_cap_dollars)  # hard risk cap
@@ -145,7 +160,8 @@ class KellySizer:
         console.print(
             f"[cyan][Kelly][{strategy}] "
             f"p={p:.1%} | b={b:.2f}:1 | f*={raw_kelly:.3f} | "
-            f"¼-Kelly={fractional_kelly_pct:.3f} → ${size:,.0f}[/cyan]"
+            f"eff_kelly={effective_kelly:.3f} (size={size_multiplier:.2f}×greed={greedy_multiplier:.2f}) "
+            f"→ ${size:,.0f}[/cyan]"
         )
         return size
 
@@ -155,19 +171,29 @@ class KellySizer:
         equity: float,
         premium_per_contract: float,
         override_max_pct: Optional[float] = None,
+        size_multiplier: float = 1.0,
+        greedy_multiplier: float = 1.0,
     ) -> int:
         """
         Convenience: returns number of option contracts (rounded down).
 
         Args:
             premium_per_contract: Cost/credit per contract in USD (e.g. premium × 100).
+            size_multiplier: Council conviction tier multiplier (0.40–1.00).
+            greedy_multiplier: Opportunity score multiplier (1.0–2.0).
 
         Returns:
             Integer number of contracts (minimum 1).
         """
         if premium_per_contract <= 0:
             return 1
-        dollar_size = self.get_position_size(strategy, equity, override_max_pct)
+        dollar_size = self.get_position_size(
+            strategy, equity, override_max_pct,
+            size_multiplier=size_multiplier,
+            greedy_multiplier=greedy_multiplier,
+        )
+        if dollar_size <= 0:
+            return 0
         n = max(1, int(dollar_size / premium_per_contract))
         log.info(
             f"[KellySizer][{strategy}] ${dollar_size:,.0f} / ${premium_per_contract:,.0f} "

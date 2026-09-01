@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from core.kelly_sizer import KellySizer
     from core.smart_executor import SmartExecutor
     from core.trade_journal import TradeJournal
+    from core.opportunity_scorer import OpportunityScorer
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class MomoBreakoutAgent:
         kelly_sizer: Optional["KellySizer"] = None,
         smart_executor: Optional["SmartExecutor"] = None,
         journal: Optional["TradeJournal"] = None,
+        opportunity_scorer: Optional["OpportunityScorer"] = None,
     ) -> None:
         self.client = client
         self.md = market_data
@@ -80,6 +82,7 @@ class MomoBreakoutAgent:
         self.kelly = kelly_sizer
         self.executor = smart_executor
         self.journal = journal
+        self.opportunity_scorer = opportunity_scorer
         self.watchlist = config.UNIVERSE.momo_watchlist
         self.active_positions: dict[str, dict] = {}
         # {symbol: peak_plpc} — tracks all-time high unrealised P&L per position
@@ -106,6 +109,8 @@ class MomoBreakoutAgent:
             if symbol in self.active_positions:
                 continue
 
+            size_multiplier = 1.0
+
             try:
                 ema_signal = self.md.get_ema_signal(symbol)
                 vol_surge = self.md.get_volume_surge(symbol)
@@ -131,22 +136,48 @@ class MomoBreakoutAgent:
                         )
                         consensus = self.council.vote(symbol, ctx, strategy="momentum_call")
                         console.print(consensus.summary())
-                        if not consensus.agreed:
+                        if consensus.conviction_tier == "veto":
                             console.print(
                                 f"[yellow][COUNCIL VETO] {symbol} momo: "
-                                f"score={consensus.net_score:+.3f} (threshold={consensus.threshold}). "
-                                f"Dissenting: {consensus.dissenting_models or 'none (all hold)'}"
-                                f"[/yellow]"
+                                f"score={consensus.net_score:+.3f} | tier=VETO[/yellow]"
                             )
                             log.info(
                                 f"[{symbol}] Council vetoed momo entry: "
-                                f"score={consensus.net_score:+.3f} | "
-                                f"votes={[(v.model.split('/')[-1], v.action, v.confidence) for v in consensus.votes]}"
+                                f"score={consensus.net_score:+.3f} | tier=veto"
                             )
                             continue  # skip this trade
+                        size_multiplier = consensus.size_multiplier
+                        console.print(
+                            f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} momo: "
+                            f"size_mult={size_multiplier:.2f}[/green]"
+                        )
                     # ──────────────────────────────────────────────────
 
-                    action = self._buy_call(symbol, equity)
+                    # ── Opportunity Scorer — greedy multiplier ─────────
+                    greedy_multiplier = 1.0
+                    if self.opportunity_scorer is not None:
+                        opp_ctx = {
+                            "ivr": min(self.md.estimate_historical_vol(symbol) * 200, 100),
+                            "vix": self.rm.current_vix,
+                            "ema_signal": ema_signal.get("signal", "neutral"),
+                            "ema_crossover": ema_signal.get("crossover", False),
+                            "volume_surge_ratio": vol_surge.get("surge_ratio", 1.0),
+                            "strategy": "momo",
+                        }
+                        greedy_multiplier = self.opportunity_scorer.score(
+                            opp_ctx,
+                            open_positions=list(self.active_positions.keys()),
+                            session_pnl=self.rm.daily_pnl,
+                        )
+                    # ──────────────────────────────────────────────────
+
+                    votes_list = consensus.votes if (self.council and consensus) else []
+                    action = self._buy_call(
+                        symbol, equity,
+                        size_multiplier=size_multiplier,
+                        greedy_multiplier=greedy_multiplier,
+                        votes=votes_list,
+                    )
                     if action:
                         actions.append(action)
 
@@ -157,7 +188,14 @@ class MomoBreakoutAgent:
 
         return actions
 
-    def _buy_call(self, symbol: str, equity: float) -> Optional[dict]:
+    def _buy_call(
+        self,
+        symbol: str,
+        equity: float,
+        size_multiplier: float = 1.0,
+        greedy_multiplier: float = 1.0,
+        votes: Optional[list] = None,
+    ) -> Optional[dict]:
         """Buy OTM call using Kelly-sized position and mid-price limit order."""
         expiry_min = (date.today() + timedelta(days=28)).isoformat()
         expiry_max = (date.today() + timedelta(days=45)).isoformat()
@@ -185,6 +223,8 @@ class MomoBreakoutAgent:
                 equity=equity,
                 premium_per_contract=est_premium * 100,
                 override_max_pct=MAX_PREMIUM_PER_TRADE_PCT,
+                size_multiplier=size_multiplier,
+                greedy_multiplier=greedy_multiplier,
             )
         else:
             n_contracts = max(1, int((equity * MAX_PREMIUM_PER_TRADE_PCT) / (est_premium * 100)))
@@ -206,6 +246,11 @@ class MomoBreakoutAgent:
             result = self.client.place_option_market_order(contract["symbol"], n_contracts, "buy")
         # ─────────────────────────────────────────────────────────
 
+        conviction_tier = "bypass"
+        if self.council is not None:
+            tier_by_mult = {1.0: "strong", 0.70: "moderate", 0.40: "pilot", 0.0: "veto"}
+            conviction_tier = tier_by_mult.get(round(size_multiplier, 2), "strong")
+
         action = {
             "agent": "MomoBreakout",
             "action": "buy_call",
@@ -216,6 +261,9 @@ class MomoBreakoutAgent:
             "qty": n_contracts,
             "entry_premium_est": est_premium,
             "order_id": result.get("id"),
+            "conviction_tier": conviction_tier,
+            "size_multiplier": size_multiplier,
+            "greedy_multiplier": greedy_multiplier,
         }
         self.active_positions[symbol] = {
             **action,
@@ -223,7 +271,7 @@ class MomoBreakoutAgent:
         }
         self._peak_plpc[symbol] = 0.0  # initialise trailing stop tracker
 
-        # ── Journal: log entry ─────────────────────────────────────
+        # ── Journal & Credibility: log entry ───────────────────────
         if self.journal is not None:
             trade_id = self.journal.log_entry(
                 agent="MomoBreakout",
@@ -235,12 +283,17 @@ class MomoBreakoutAgent:
                 entry_price=est_premium,
             )
             self.active_positions[symbol]["journal_id"] = trade_id
+            if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                target_votes = votes if votes is not None else getattr(self.council, "_last_votes", [])
+                if target_votes:
+                    self.council._credibility_tracker.record_votes(trade_id, target_votes)
         # ─────────────────────────────────────────────────────────
 
         console.print(
             f"[green][FILLED] MomoBreakout BOUGHT CALL: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} x{n_contracts} "
-            f"| est premium=${est_premium:.2f} | Kelly-sized[/green]"
+            f"| est premium=${est_premium:.2f} | tier={conviction_tier.upper()} "
+            f"| greed={greedy_multiplier:.2f} | Kelly-sized[/green]"
         )
         return action
 
@@ -301,10 +354,12 @@ class MomoBreakoutAgent:
                 else:
                     self.client.place_option_market_order(contract_sym, meta["qty"], "sell")
 
-                # ── Journal: log exit ──────────────────────────────────
+                # ── Journal & Credibility: log exit ────────────────────
                 if self.journal is not None and "journal_id" in meta:
                     exit_price = meta["entry_premium"] * (1 + plpc)
                     self.journal.log_exit(meta["journal_id"], exit_price, reason)
+                    if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                        self.council._credibility_tracker.update_credibility(meta["journal_id"], plpc > 0)
                 # ──────────────────────────────────────────────────────
 
                 del self.active_positions[symbol]

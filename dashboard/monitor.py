@@ -36,11 +36,14 @@ if sys.stdout.encoding != "utf-8":
     except Exception:
         pass
 
+import threading
+from collections import deque
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Automatically bridge Streamlit Cloud Secrets into os.environ
 try:
@@ -56,6 +59,8 @@ from core.alpaca_client import AlpacaClient
 from core.market_data import MarketData
 from core.trade_journal import TradeJournal
 from core.kelly_sizer import KellySizer
+from core.opportunity_scorer import OpportunityScorer
+from agents.orchestrator import Orchestrator
 
 # ── Page Configuration ─────────────────────────────────────────
 st.set_page_config(
@@ -63,6 +68,19 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── Persistent Keep-Alive (Prevents Streamlit Cloud Hibernation) ──
+components.html("""
+<script>
+    // Keep-alive heartbeat: ping self every 4.5 minutes to prevent Cloud sleep
+    setInterval(function() {
+        try {
+            fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
+            console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
+        } catch(e) {}
+    }, 270000);
+</script>
+""", height=0)
 
 # ── Custom CSS for High-End Financial Terminal UI ─────────────
 st.markdown("""
@@ -177,6 +195,80 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Background Autonomous Auto-Pilot Engine ─────────────────────
+@st.cache_resource
+def get_background_engine():
+    session_logs = deque(maxlen=150)
+    engine_lock = threading.Lock()
+    engine_state = {
+        "status": "RUNNING (Market Scheduler)",
+        "last_run": "Never",
+        "last_regime": "N/A",
+        "last_pnl": 0.0,
+        "runs_count": 0,
+        "is_busy": False,
+        "last_error": None,
+    }
+
+    def _auto_pilot_worker():
+        interval_secs = config.HYBRID.session_interval_minutes * 60
+        last_executed_time = None
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                is_weekday = now.weekday() < 5  # Mon-Fri
+                # US regular market hours (approx, UTC): 13:30–21:00
+                market_open = now.replace(hour=13, minute=30, second=0, microsecond=0)
+                market_close = now.replace(hour=21, minute=0, second=0, microsecond=0)
+                is_market_hours = is_weekday and (market_open <= now <= market_close)
+
+                time_since_last = (now - last_executed_time).total_seconds() if last_executed_time else interval_secs + 1
+                
+                should_run = False
+                with engine_lock:
+                    should_run = (
+                        is_market_hours
+                        and time_since_last >= interval_secs
+                        and not engine_state["is_busy"]
+                    )
+                    if should_run:
+                        engine_state["is_busy"] = True
+                        engine_state["status"] = "EXECUTING SESSION..."
+
+                if should_run:
+                    try:
+                        orch = Orchestrator()
+                        summary = orch.run_session()
+                        with engine_lock:
+                            engine_state["last_run"] = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+                            engine_state["last_regime"] = summary.get("regime", "neutral").upper()
+                            engine_state["last_pnl"] = summary.get("daily_pnl", 0.0)
+                            engine_state["runs_count"] += 1
+                            session_logs.appendleft({
+                                "time": engine_state["last_run"],
+                                "type": "AUTO_PILOT",
+                                "regime": engine_state["last_regime"],
+                                "pnl": engine_state["last_pnl"],
+                                "actions": summary.get("actions_taken", 0),
+                                "details": summary.get("actions", []),
+                            })
+                        last_executed_time = now
+                    except Exception as exc:
+                        with engine_lock:
+                            engine_state["last_error"] = str(exc)
+                    finally:
+                        with engine_lock:
+                            engine_state["is_busy"] = False
+                            engine_state["status"] = "RUNNING (Market Scheduler)"
+            except Exception as e:
+                with engine_lock:
+                    engine_state["last_error"] = str(e)
+            time.sleep(30)
+
+    thread = threading.Thread(target=_auto_pilot_worker, daemon=True, name="CacheMeAutoPilot")
+    thread.start()
+    return session_logs, engine_lock, engine_state
+
 # ── Client & Core Singletons ───────────────────────────────────
 @st.cache_resource
 def get_system():
@@ -186,25 +278,63 @@ def get_system():
     kelly = KellySizer(journal)
     return client, md, journal, kelly
 
+bg_logs, bg_lock, bg_state = get_background_engine()
+
 # ── Sidebar ────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### System Controls")
-    auto_refresh = st.toggle("Auto-refresh (15s)", value=True)
+    auto_refresh = st.toggle("Auto-refresh (30s)", value=True)
     
+    status_color = "#3fb950" if not bg_state["is_busy"] else "#d29922"
     st.markdown(f"""
-    <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 10px;">
+    <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 10px; margin-bottom: 12px;">
         <div style="font-size: 11px; color: #8b949e; text-transform: uppercase; font-weight: 600;">Autonomous Engine</div>
-        <div style="font-size: 14px; font-weight: 600; color: #3fb950; margin-top: 4px;">ACTIVE (Scheduled / Market Open)</div>
-        <div style="font-size: 12px; color: #8b949e; margin-top: 4px;">Trading runs automatically during market hours.</div>
+        <div style="font-size: 13px; font-weight: 700; color: {status_color}; margin-top: 3px;">{bg_state['status']}</div>
+        <div style="font-size: 11px; color: #8b949e; margin-top: 4px;">Last Session: {bg_state['last_run']}</div>
+        <div style="font-size: 11px; color: #8b949e;">Sessions Completed: {bg_state['runs_count']}</div>
     </div>
     """, unsafe_allow_html=True)
 
+    # Manual Trigger Button
+    if st.button("▶ Run Trading Session Now", use_container_width=True, disabled=bg_state["is_busy"]):
+        with st.status("Executing Autonomous Multi-Agent Trading Session...", expanded=True) as status_box:
+            st.write("Initializing market data, risk manager, and LLM council...")
+            try:
+                orch = Orchestrator()
+                st.write(f"VIX regime detected: **{orch.rm.current_vix:.1f}**")
+                st.write("Running strategy fleet: Hedge -> Theta -> Momo -> IV Crush...")
+                summary = orch.run_session()
+                pnl = summary.get("daily_pnl", 0.0)
+                pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+                st.write(f"Session finished. Actions taken: **{summary.get('actions_taken', 0)}** | Daily P&L: **{pnl_str}**")
+                status_box.update(label=f"Session Complete ({pnl_str})", state="complete", expanded=False)
+                
+                # Update shared state
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                with bg_lock:
+                    bg_state["last_run"] = now_str
+                    bg_state["last_regime"] = summary.get("regime", "neutral").upper()
+                    bg_state["last_pnl"] = pnl
+                    bg_state["runs_count"] += 1
+                    bg_logs.appendleft({
+                        "time": now_str,
+                        "type": "MANUAL_TRIGGER",
+                        "regime": bg_state["last_regime"],
+                        "pnl": pnl,
+                        "actions": summary.get("actions_taken", 0),
+                        "details": summary.get("actions", []),
+                    })
+                st.rerun()
+            except Exception as e:
+                st.error(f"Trading session error: {e}")
+                status_box.update(label="Session Failed", state="error", expanded=True)
+
     st.divider()
-    st.markdown("### Multi-Agent Fleet")
-    st.markdown("- **Theta Collector**: Cash-Secured Puts (SPY, QQQ, IWM)")
-    st.markdown("- **Momo Breakout**: OTM Calls + Trailing Stop")
+    st.markdown("### Multi-Agent Fleet (Hybrid)")
+    st.markdown("- **Theta Collector**: CSP Income + Greedy Scale")
+    st.markdown("- **Momo Breakout**: OTM Calls (Risk-On & Neutral)")
     st.markdown("- **IV Crush**: Pre-Earnings Straddles")
-    st.markdown("- **Hedge Agent**: Protective SPY Puts")
+    st.markdown("- **Hedge Agent**: SPY Put Portfolio Defense")
     st.divider()
     st.markdown("### Resources & Links")
     st.markdown("- [Alpaca Paper Console](https://app.alpaca.markets/paper/dashboard/overview)")
@@ -250,11 +380,12 @@ except Exception as e:
 
 if data_loaded:
     # ── Top Level Tabs ─────────────────────────────────────────────
-    tab_overview, tab_live_ai, tab_live_kelly, tab_charts = st.tabs([
+    tab_overview, tab_live_ai, tab_live_kelly, tab_charts, tab_engine = st.tabs([
         "Portfolio Overview",
         "Live AI Decisions",
         "Live Kelly Sizing & Execution",
         "Market Charts & Payoffs",
+        "Trading Engine",
     ])
 
     with tab_overview:
@@ -425,11 +556,13 @@ if data_loaded:
             """, unsafe_allow_html=True)
 
     with tab_live_ai:
-        st.markdown("<div style='color: #58a6ff; font-size: 18px; font-weight: 700; margin-bottom: 10px;'>Live AI Market Regime & Decision Feed</div>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #58a6ff; font-size: 18px; font-weight: 700; margin-bottom: 10px;'>Live AI Market Regime & Hybrid Decision Feed</div>", unsafe_allow_html=True)
 
         vix_val = md.get_vix()
         regime_str = "RISK_ON" if vix_val < 18.0 else ("NEUTRAL" if vix_val < 28.0 else "RISK_OFF")
         regime_color = "#3fb950" if regime_str == "RISK_ON" else ("#d29922" if regime_str == "NEUTRAL" else "#f85149")
+
+        opp_scorer = OpportunityScorer()
 
         r1, r2, r3 = st.columns(3)
         with r1:
@@ -437,7 +570,7 @@ if data_loaded:
             <div class="metric-card" style="border-left: 4px solid {regime_color};">
                 <div class="metric-label">Detected Market Regime</div>
                 <div class="metric-value" style="color: {regime_color};">{regime_str}</div>
-                <div style="font-size: 12px; color: #8b949e;">VIX Proxy: {vix_val:.1f}</div>
+                <div style="font-size: 12px; color: #8b949e;">VIX Proxy: {vix_val:.1f} | Adaptive Thresholds Active</div>
             </div>
             """, unsafe_allow_html=True)
         with r2:
@@ -445,24 +578,25 @@ if data_loaded:
             <div class="metric-card" style="border-left: 4px solid #58a6ff;">
                 <div class="metric-label">3-Model LLM Council Status</div>
                 <div class="metric-value" style="font-size: 22px;">{'ACTIVE (3 Models)' if config.COUNCIL.enabled else 'RULES FALLBACK'}</div>
-                <div style="font-size: 12px; color: #8b949e;">Consensus Threshold: &ge; {config.COUNCIL.consensus_threshold:.2f}</div>
+                <div style="font-size: 12px; color: #8b949e;">Voting Mode: Credibility-Weighted & Tiered Sizing</div>
             </div>
             """, unsafe_allow_html=True)
         with r3:
             st.markdown(f"""
             <div class="metric-card" style="border-left: 4px solid #bc8cff;">
                 <div class="metric-label">Active Strategy Allocation</div>
-                <div class="metric-value" style="font-size: 20px;">{'All 4 Agents Active' if regime_str == 'RISK_ON' else ('Theta + IV + Hedge' if regime_str == 'NEUTRAL' else 'Hedge Only')}</div>
-                <div style="font-size: 12px; color: #8b949e;">Regime-routed capital defense</div>
+                <div class="metric-value" style="font-size: 20px;">{'All 4 Agents Active' if regime_str in ('RISK_ON', 'NEUTRAL') else 'Hedge Defense Only (Risk-Off)'}</div>
+                <div style="font-size: 12px; color: #8b949e;">Greedy Multipliers Enabled (up to 2.0x Kelly)</div>
             </div>
             """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Live Watchlist Signal Scan & AI Council Verdicts</div>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Live Watchlist Signal Scan & Hybrid AI Verdicts</div>", unsafe_allow_html=True)
 
         # Build live scan data
         scan_symbols = ["SPY", "QQQ", "IWM", "GLD", "SLV", "PLTR", "SOFI", "NVDA", "TSLA", "AAPL"]
         scan_rows = []
+        open_sym_list = [p["symbol"] for p in positions]
 
         for sym in scan_symbols:
             try:
@@ -475,31 +609,57 @@ if data_loaded:
                 # Determine strategy & AI verdict
                 if sym in config.UNIVERSE.theta_symbols:
                     strat = "Theta CSP"
+                    opp_val = opp_scorer.score({
+                        "ivr": ivr, "vix": vix_val,
+                        "ema_signal": "bullish", "strategy": "theta"
+                    }, open_positions=open_sym_list, session_pnl=total_pnl)
+                    
                     if ivr > 30 and regime_str in ("RISK_ON", "NEUTRAL"):
-                        action = "BUY (SELL PUT)"
+                        tier = "STRONG" if ivr >= 50 else "MODERATE"
+                        size_mult = "1.00x" if tier == "STRONG" else "0.70x"
+                        action = "SELL PUT"
                         score = "+0.85"
-                        decision = "APPROVED (High IVR)"
+                        decision = f"APPROVED ({tier})"
                     else:
+                        tier = "PILOT" if ivr >= 20 else "VETO"
+                        size_mult = "0.40x" if tier == "PILOT" else "0.00x"
                         action = "HOLD"
                         score = "+0.20"
-                        decision = "MONITORING (IVR < 30)"
+                        decision = f"MONITORING ({tier})"
                 elif sym in config.UNIVERSE.momo_watchlist:
                     strat = "Momo Call"
+                    opp_val = opp_scorer.score({
+                        "ivr": ivr, "vix": vix_val,
+                        "ema_signal": ema_res.get("signal", "neutral"),
+                        "ema_crossover": ema_res.get("crossover", False),
+                        "volume_surge_ratio": vol_res.get("surge_ratio", 1.0),
+                        "strategy": "momo"
+                    }, open_positions=open_sym_list, session_pnl=total_pnl)
+                    
                     if ema_res.get("crossover") and vol_res.get("is_surging"):
-                        action = "BUY (CALL)"
+                        tier = "STRONG"
+                        size_mult = "1.00x"
+                        action = "BUY CALL"
                         score = "+0.90"
-                        decision = "APPROVED (Breakout Confirmed)"
+                        decision = "APPROVED (Breakout)"
                     elif ema_res.get("signal") == "bullish":
-                        action = "HOLD"
-                        score = "+0.45"
-                        decision = "WAITING (Vol Surge < 2x)"
+                        tier = "MODERATE"
+                        size_mult = "0.70x"
+                        action = "PILOT CALL"
+                        score = "+0.55"
+                        decision = "PILOT ENTRY"
                     else:
+                        tier = "VETO"
+                        size_mult = "0.00x"
                         action = "HOLD"
                         score = "+0.10"
                         decision = "NEUTRAL"
                 else:
                     strat = "IV Crush"
-                    action = "MONITORING"
+                    opp_val = 1.0
+                    tier = "MODERATE"
+                    size_mult = "0.70x"
+                    action = "CALENDAR"
                     score = "0.00"
                     decision = "CALENDAR SCAN"
 
@@ -507,12 +667,13 @@ if data_loaded:
                     "Symbol": sym,
                     "Strategy": strat,
                     "Price": f"${price:.2f}",
-                    "EMA Fast/Slow": f"${ema_res.get('ema_fast', 0):.1f} / ${ema_res.get('ema_slow', 0):.1f}",
                     "EMA Signal": ema_res.get("signal", "neutral").upper(),
                     "Vol Surge": f"{vol_res.get('surge_ratio', 1.0):.1f}x",
                     "IV Rank": f"{ivr:.0f}%",
+                    "Conviction Tier": tier,
+                    "Greed Mult": f"{opp_val:.2f}x",
+                    "Size Mult": size_mult,
                     "AI Action": action,
-                    "Council Score": score,
                     "Live Verdict": decision,
                 })
             except Exception:
@@ -520,7 +681,6 @@ if data_loaded:
 
         if scan_rows:
             scan_df = pd.DataFrame(scan_rows)
-            # Expand table height dynamically so no internal scrolling is needed
             st.dataframe(
                 scan_df,
                 use_container_width=True,
@@ -825,62 +985,173 @@ if data_loaded:
             st.warning(f"Unable to load chart stream for {selected_asset}: {e}")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("<div style='color: #bc8cff; font-size: 16px; font-weight: 600; margin-bottom: 10px;'>Options Expiration Simulator</div>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #bc8cff; font-size: 16px; font-weight: 600; margin-bottom: 10px;'>Options Expiration Simulator & Risk Profiles</div>", unsafe_allow_html=True)
         
-        has_options = any("P" in p["symbol"] or "C" in p["symbol"] for p in positions)
-        if positions and has_options:
-            fig_payoff = go.Figure()
+        opt_positions = [
+            p for p in positions 
+            if "option" in str(p.get("asset_class", "")).lower() or ("P" in p["symbol"] or "C" in p["symbol"])
+        ]
+
+        if opt_positions:
+            st.markdown("<div style='font-size: 12px; color: #8b949e; margin-bottom: 15px;'>Isolated payoff diagrams rendered per contract to prevent cross-strike distortion.</div>", unsafe_allow_html=True)
             
-            for p in positions:
+            # Select contract to view or show all in columns
+            opt_symbols = [p["symbol"] for p in opt_positions]
+            selected_contract = st.selectbox("Select Option Contract for Deep Payoff Analysis", options=["All Active Contracts"] + opt_symbols, index=0)
+            
+            display_opts = opt_positions if selected_contract == "All Active Contracts" else [p for p in opt_positions if p["symbol"] == selected_contract]
+
+            for p in display_opts:
                 sym = p["symbol"]
                 qty = float(p["qty"])
                 avg_price = float(p["avg_entry_price"])
+                contracts = abs(qty)
                 
-                if "P" in sym and qty < 0:
-                    try:
-                        strike = float(sym[-8:]) / 1000.0
-                    except Exception:
-                        strike = 500.0
-                    
-                    premium = avg_price
-                    contracts = abs(qty)
-                    max_profit = premium * 100 * contracts
-                    breakeven = strike - premium
-                    
-                    spot_prices = np.linspace(strike * 0.82, strike * 1.12, 120)
-                    payoffs = [(premium - max(strike - s, 0.0)) * 100 * contracts for s in spot_prices]
-                    
-                    fig_payoff.add_trace(go.Scatter(
-                        x=spot_prices, y=payoffs,
-                        mode="lines",
-                        name=f"{sym[:3]} ${strike} P",
-                        line=dict(color="#58a6ff", width=2.5),
-                        fill="tozeroy",
-                        fillcolor="rgba(88, 166, 255, 0.1)"
-                    ))
-                    fig_payoff.add_hline(y=0, line_dash="dash", line_color="#8b949e")
-                    fig_payoff.add_vline(x=strike, line_dash="dot", line_color="#d29922", annotation_text=f"Strike ${strike}")
-                    fig_payoff.add_vline(x=breakeven, line_dash="dot", line_color="#f85149", annotation_text=f"BE ${breakeven:.2f}")
+                # Extract Strike and Type
+                is_put = "P" in sym
+                opt_type = "Put" if is_put else "Call"
+                is_short = qty < 0
+                side_label = "Short" if is_short else "Long"
+                
+                try:
+                    strike = float(sym[-8:]) / 1000.0
+                except Exception:
+                    strike = 500.0
 
-            fig_payoff.update_layout(
-                height=350,
-                margin=dict(t=20, b=20, l=20, r=20),
-                paper_bgcolor="#161b22",
-                plot_bgcolor="#161b22",
-                xaxis=dict(gridcolor="#21262d", title="Underlying Spot Price ($ USD)"),
-                yaxis=dict(gridcolor="#21262d", title="Net Return ($ USD)"),
-                hovermode="x unified",
-                legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center")
-            )
-            st.plotly_chart(fig_payoff, use_container_width=True)
+                premium = avg_price
+                spot_prices = np.linspace(strike * 0.80, strike * 1.20, 150)
+                
+                if is_short and is_put:
+                    # Short Put
+                    payoffs = (premium - np.maximum(strike - spot_prices, 0.0)) * 100 * contracts
+                    breakeven = strike - premium
+                    max_gain = premium * 100 * contracts
+                    max_loss = (strike - premium) * 100 * contracts
+                    card_title = f"{side_label} {opt_type} ({sym[:4]} ${strike:.1f} P) — x{contracts:.0f}"
+                elif not is_short and is_put:
+                    # Long Put
+                    payoffs = (np.maximum(strike - spot_prices, 0.0) - premium) * 100 * contracts
+                    breakeven = strike - premium
+                    max_gain = (strike - premium) * 100 * contracts
+                    max_loss = premium * 100 * contracts
+                    card_title = f"{side_label} {opt_type} ({sym[:4]} ${strike:.1f} P) — x{contracts:.0f}"
+                elif is_short and not is_put:
+                    # Short Call
+                    payoffs = (premium - np.maximum(spot_prices - strike, 0.0)) * 100 * contracts
+                    breakeven = strike + premium
+                    max_gain = premium * 100 * contracts
+                    max_loss = "Unlimited"
+                    card_title = f"{side_label} {opt_type} ({sym[:4]} ${strike:.1f} C) — x{contracts:.0f}"
+                else:
+                    # Long Call
+                    payoffs = (np.maximum(spot_prices - strike, 0.0) - premium) * 100 * contracts
+                    breakeven = strike + premium
+                    max_gain = "Unlimited"
+                    max_loss = premium * 100 * contracts
+                    card_title = f"{side_label} {opt_type} ({sym[:4]} ${strike:.1f} C) — x{contracts:.0f}"
+
+                # Metric header for this contract
+                st.markdown(f"""
+                <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 16px; margin-top: 10px; margin-bottom: 8px;">
+                    <span style="font-weight: 700; color: #58a6ff;">{card_title}</span> | 
+                    <span style="color: #8b949e;">Premium: ${premium:.2f}</span> | 
+                    <span style="color: #8b949e;">Breakeven: ${breakeven:.2f}</span> | 
+                    <span style="color: #3fb950;">Max Profit: {'$' + f'{max_gain:,.0f}' if isinstance(max_gain, (int, float)) else max_gain}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                fig_payoff = go.Figure()
+                fig_payoff.add_trace(go.Scatter(
+                    x=spot_prices, y=payoffs,
+                    mode="lines",
+                    name="Expiration Payoff ($)",
+                    line=dict(color="#58a6ff", width=2.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(88, 166, 255, 0.12)"
+                ))
+
+                fig_payoff.add_hline(y=0, line_dash="dash", line_color="#8b949e")
+                fig_payoff.add_vline(x=strike, line_dash="dot", line_color="#d29922", annotation_text=f"Strike ${strike:.1f}")
+                fig_payoff.add_vline(x=breakeven, line_dash="dot", line_color="#f85149", annotation_text=f"BE ${breakeven:.2f}")
+
+                fig_payoff.update_layout(
+                    height=280,
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    paper_bgcolor="#161b22",
+                    plot_bgcolor="#161b22",
+                    xaxis=dict(gridcolor="#21262d", title=f"Underlying Spot Price ($ USD) [Strike: ${strike:.1f}]"),
+                    yaxis=dict(gridcolor="#21262d", title="Net Return ($ USD)"),
+                    hovermode="x unified",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_payoff, use_container_width=True)
+
         else:
-            st.info("No active options positions to simulate.")
+            st.info("No active options positions to simulate. Open options will display individual expiration risk profiles here.")
+
+    with tab_engine:
+        st.markdown("<div style='color: #58a6ff; font-size: 18px; font-weight: 700; margin-bottom: 10px;'>Autonomous Trading Engine & Cloud Auto-Pilot</div>", unsafe_allow_html=True)
+
+        e1, e2, e3, e4 = st.columns(4)
+        with e1:
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #3fb950;">
+                <div class="metric-label">Auto-Pilot Status</div>
+                <div class="metric-value" style="font-size: 18px; color: #3fb950;">ACTIVE</div>
+                <div style="font-size: 11px; color: #8b949e;">Market Hours Scheduler</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with e2:
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #58a6ff;">
+                <div class="metric-label">Last Execution</div>
+                <div class="metric-value" style="font-size: 16px;">{bg_state['last_run']}</div>
+                <div style="font-size: 11px; color: #8b949e;">Regime: {bg_state['last_regime']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with e3:
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #bc8cff;">
+                <div class="metric-label">Sessions Completed</div>
+                <div class="metric-value" style="font-size: 20px;">{bg_state['runs_count']}</div>
+                <div style="font-size: 11px; color: #8b949e;">Interval: Every {config.HYBRID.session_interval_minutes}m</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with e4:
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid #d29922;">
+                <div class="metric-label">Keep-Alive Engine</div>
+                <div class="metric-value" style="font-size: 18px; color: #d29922;">ENABLED</div>
+                <div style="font-size: 11px; color: #8b949e;">Heartbeat 4.5m interval</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div style='color: #8b949e; font-size: 14px; font-weight: 600; margin-bottom: 10px;'>Live Autonomous Session Activity Feed</div>", unsafe_allow_html=True)
+
+        if bg_logs:
+            for item in list(bg_logs)[:15]:
+                pnl_c = "#3fb950" if item.get("pnl", 0) >= 0 else "#f85149"
+                pnl_txt = f"+${item.get('pnl', 0):,.2f}" if item.get("pnl", 0) >= 0 else f"-${abs(item.get('pnl', 0)):,.2f}"
+                st.markdown(f"""
+                <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="font-weight: 700; color: #58a6ff;">[{item['type']}] Trading Session</span>
+                        <span style="font-size: 12px; color: #8b949e;">{item['time']}</span>
+                    </div>
+                    <div style="font-size: 13px; color: #e6edf3; margin-top: 4px;">
+                        Regime: <b>{item['regime']}</b> | Actions Taken: <b>{item['actions']}</b> | Daily P&L: <b style="color: {pnl_c};">{pnl_txt}</b>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("No trading sessions logged yet this runtime. Trigger a session manually via the sidebar or await market open.")
 
 # ── Footer ─────────────────────────────────────────────────────
 st.divider()
 st.caption("Cache Me If You Can | Alpaca AI Trading Agents Hackathon 2026 | lablab.ai x Alpaca")
 
-# ── Auto-refresh Trigger ───────────────────────────────────────
+# ── Auto-refresh Trigger (30s) ─────────────────────────────────
 if auto_refresh:
-    time.sleep(15)
+    time.sleep(30)
     st.rerun()

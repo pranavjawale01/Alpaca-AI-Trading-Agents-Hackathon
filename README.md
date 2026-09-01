@@ -21,8 +21,10 @@ Most retail algorithmic traders lose money not because their signals are wrong, 
 
 | Pro Feature | Problem Solved | Implementation |
 |:---|:---|:---|
-| **3-Model LLM Council** | False signals — 1 model can be confidently wrong | `meta-llama` + `Mistral` + `DeepSeek` vote in parallel; only high-consensus signals trade |
-| **Kelly Criterion Sizing** | Fixed % sizing ignores edge — over-bets losers, under-bets winners | Quarter-Kelly per strategy, fed by historical win rate from trade journal |
+| **Hybrid LLM Council** | Binary pass/fail drops viable setups; single models can hallucinate | 3 models vote in parallel; credibility-weighted scores determine conviction tiers (`STRONG`, `MODERATE`, `PILOT`) |
+| **Model Credibility Tracker** | Unreliable models vote with same weight as accurate ones | `ModelCredibilityTracker` logs all votes to SQLite and dynamically adjusts weights (`[0.5, 1.5]`) based on trade P&L |
+| **Greedy Opportunity Scorer** | Flat quarter-Kelly leaves money on the table during prime setups | Stacks 6 independent signals (IVR > 50, EMA alignment, VIX sweet-spot, volume surge, winning streak) to scale Kelly up to `2.0x` |
+| **Streamlit Cloud Auto-Pilot** | Streamlit Cloud hibernates on dormancy; requires external VPS | In-process daemon thread runs scheduled sessions during market hours + client-side keep-alive JS heartbeat |
 | **Mid-Price Limit Orders** | Market orders on options pay full bid-ask spread (10–30% of premium) | `SmartExecutor` targets mid, steps price, market fallback — saves significant slippage |
 | **Trailing Stop Loss** | Fixed stop cuts winners too early after they peak | Tracks high-water mark; exits at 25% pullback from peak, not 50% from cost |
 | **Trade Journal (SQLite)** | Agents never learn from past trades | Every entry/exit logged; Kelly reads stats next session to improve sizing |
@@ -48,17 +50,19 @@ Most retail algorithmic traders lose money not because their signals are wrong, 
          v                v                    v                v
  +---------------+ +---------------+  +-----------------+ +-----------+
  │ ThetaCollector│ │ IVCrushAgent  │  │  MomoBreakout   │ │HedgeAgent │
- │  (CSP Income) │ │ (Straddles)   │  │   (OTM Calls)   │ │(SPY Puts) │
+ │  (CSP Income) │ │ (Straddles)   │  │ (Calls / M-Tier)│ │(SPY Puts) │
  +-------+-------+ +-------+-------+  +--------+--------+ +-----+-----+
          |                 |                   |
-         +---+  LLM Council (3 Models)  +------+
-             |  Vote Gate per Signal    |
+         +---+  Hybrid LLM Council +-----------+
+             │  • Credibility-Weighted Voting (0.5x–1.5x)
+             │  • Dynamic Opportunity Scorer (1.0x–2.0x)
+             │  • Regime-Adaptive Conviction Tiers
              +-----------+--------------+
                          |
          +---------------v---------------+
-         |        Pro Trading Layer       |
-         | KellySizer → SmartExecutor     |
-         | TradeJournal → Trailing Stop   |
+         |        Pro Trading Layer      |
+         | Dynamic Kelly → SmartExecutor |
+         | TradeJournal → Trailing Stop  |
          +---------------+---------------+
                          |
                          v
@@ -78,41 +82,44 @@ Most retail algorithmic traders lose money not because their signals are wrong, 
 
 ## Multi-Agent Strategy Portfolio
 
-| Agent | Strategy & Mechanics | Target Delta | DTE Range | Exit Conditions |
-| :--- | :--- | :---: | :---: | :--- |
-| **Theta Collector** | Sells cash-secured puts on liquid ETFs (`SPY`, `QQQ`, `IWM`, `GLD`, `PLTR`, `SOFI`) to collect time decay premium. Kelly-sized contracts, mid-price limit sell. | ~0.20 | 28-45 Days | 50% max profit OR 21 DTE time stop |
-| **IV Crush Agent** | Sells ATM straddles 1-3 days prior to earnings to capture volatility collapse. Kelly-sized, limit fills on both legs. | 0.00 | 7-14 Days | 40% profit OR expired worthless |
-| **Momo Breakout** | Buys cheap OTM calls on EMA 20/50 crossover + 2× volume surge. Kelly-sized, **trailing stop** from peak P&L. | ~0.30 | 28-45 Days | +100% gain OR trailing stop (25% pullback from peak) |
-| **Hedge Agent** | Buys protective SPY puts when portfolio delta > +30 or VIX > 22. Always runs before other agents. | -0.20 | 28-45 Days | Closed when conditions normalise |
+| Agent | Strategy & Mechanics | Target Delta | DTE Range | Regime Activation | Exit Conditions |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Theta Collector** | Sells cash-secured puts on liquid ETFs (`SPY`, `QQQ`, `IWM`, `GLD`, `PLTR`, `SOFI`) to collect time decay premium. Kelly-sized with greedy multiplier scaling. | ~0.20 | 28-45 Days | `RISK_ON`, `NEUTRAL` | 50% max profit OR 21 DTE time stop |
+| **IV Crush Agent** | Sells ATM straddles 1-3 days prior to earnings to capture volatility collapse. Kelly-sized, limit fills on both legs. | 0.00 | 7-14 Days | `RISK_ON`, `NEUTRAL` | 40% profit OR expired worthless |
+| **Momo Breakout** | Buys cheap OTM calls on EMA 20/50 crossover + 2× volume surge. Kelly-sized, **trailing stop** from peak P&L. | ~0.30 | 28-45 Days | `RISK_ON`, `NEUTRAL` | +100% gain OR trailing stop (25% pullback from peak) |
+| **Hedge Agent** | Buys protective SPY puts when portfolio delta > +30 or VIX > 22. Always runs before other agents. | -0.20 | 28-45 Days | All Regimes (Priority) | Closed when conditions normalise |
 
 ---
 
-## 3-Model LLM Council (Voting Ensemble)
+## Hybrid Greedy-Voting Council
 
-Every trade signal generated by rules-based conditions passes through a **three-model voting panel** before any order is submitted:
+Every trade signal generated by rules-based conditions passes through a **credibility-weighted, tiered voting panel**:
 
 ```
 Signal Detected (EMA crossover, IVR threshold, etc.)
          │
          ▼
-┌────────────────────────────────────────────────────┐
-│              LLM Council Vote                       │
-│                                                    │
-│  Model 1: meta-llama/Llama-3.1-8B-Instruct         │
-│  Model 2: mistralai/Mistral-7B-Instruct-v0.3       │
-│  Model 3: deepseek-ai/DeepSeek-R1-Distill-Llama-8B │
-│                                                    │
-│  All 3 queried in parallel (ThreadPoolExecutor)    │
-│                                                    │
-│  Vote formula:                                     │
-│  net_score = Σ(confidence_i × vote_i) / n_models  │
-│  buy=+1, hold=0, sell=-1                           │
-│                                                    │
-│  Consensus if |net_score| ≥ 0.60                   │
-└────────────────────────────────────────────────────┘
-         │ consensus.agreed == True?
-         ├── YES → Trade executes
-         └── NO  → COUNCIL VETO (logged, skipped)
+┌────────────────────────────────────────────────────────────┐
+│              Hybrid LLM Council Vote                       │
+│                                                            │
+│  Model 1: meta-llama/Llama-3.1-8B-Instruct (Weight: w₁)    │
+│  Model 2: mistralai/Mistral-7B-Instruct-v0.3 (Weight: w₂)  │
+│  Model 3: deepseek-ai/DeepSeek-R1-Distill-Llama-8B (w₃)    │
+│                                                            │
+│  Credibility-weighted formula:                             │
+│  net_score = Σ(w_i × confidence_i × vote_i) / Σ(w_i)       │
+│                                                            │
+│  Regime-Specific Conviction Tiers & Multipliers:           │
+│  • Risk-On  (VIX < 18):   Strong ≥ 0.55 | Mod ≥ 0.40 | Pilot ≥ 0.25 │
+│  • Neutral  (18 ≤ VIX < 28): Strong ≥ 0.65 | Mod ≥ 0.50 | Pilot ≥ 0.35 │
+│  • Risk-Off (VIX ≥ 28):  Strong ≥ 0.80 | Mod ≥ 0.65 | Pilot ≥ 0.50 │
+│  • VETO     (< Pilot):   Size Multiplier: 0.00x (Halt)     │
+│                                                            │
+│  Multiplier Sizing: Strong=1.00x, Moderate=0.70x, Pilot=0.40x │
+└────────────────────────────────────────────────────────────┘
+         │
+         ├── NOT VETO → Multiply with OpportunityScorer (1.0x-2.0x) → Sized Kelly Order
+         └── VETO     → Logged and Skipped
 ```
 
 **Timeout safety:** A model that takes > 10s casts a neutral `hold` at 0 confidence — it doesn't block or trigger trades.  
@@ -120,20 +127,24 @@ Signal Detected (EMA crossover, IVR threshold, etc.)
 
 ---
 
-## Kelly Criterion Position Sizing
+## Dynamic Kelly Criterion & Opportunity Scorer
 
-Position sizes are computed mathematically per strategy, not guessed as a fixed percentage:
+Position sizes are computed mathematically per strategy and scaled by live opportunity metrics:
 
 ```
-Kelly fraction:  f* = (b·p - q) / b
+Effective Kelly Fraction = min(Base Kelly × Size Multiplier × Greedy Multiplier, 0.50)
 
 where:
-  b = avg_win / avg_loss  (reward-to-risk from trade history)
-  p = historical win rate  (from TradeJournal SQLite)
-  q = 1 - p
-
-Actual size used:  f* × 0.25  (quarter-Kelly — industry standard)
-Hard cap:          config.RISK.max_position_pct (5% of equity)
+  Base Kelly        = Quarter-Kelly (0.25) derived from historical win-rate (b·p - q) / b
+  Size Multiplier   = Conviction Tier Output (1.00x STRONG, 0.70x MODERATE, 0.40x PILOT)
+  Greedy Multiplier = Stacking Multi-Factor Score (1.0x to 2.0x):
+                      +0.20 if IVR > 50
+                      +0.20 if EMA Trend confirms strategy direction
+                      +0.15 if VIX is in optimal 15-22 range
+                      +0.15 if Volume Surge > 1.8x
+                      +0.15 if Symbol not in active positions (diversification)
+                      +0.15 if Daily Session P&L is positive (scale into winners)
+Hard cap:            config.RISK.max_position_pct (5% of equity)
 ```
 
 - **No trade history** (< 10 closed trades): conservative defaults (0.5–1.0% equity)

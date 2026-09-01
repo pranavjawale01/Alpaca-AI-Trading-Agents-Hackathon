@@ -91,13 +91,14 @@ class ModelCredibilityTracker:
 
     def _connect(self) -> sqlite3.Connection:
         """
-        Helper to connect to the SQLite database.
+        Helper to connect to the SQLite database with busy timeout resilience.
 
         Returns:
             sqlite3.Connection with Row factory configured.
         """
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000;")
         return conn
 
     def record_votes(

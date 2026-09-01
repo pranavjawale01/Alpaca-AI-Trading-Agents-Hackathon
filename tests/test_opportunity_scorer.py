@@ -158,3 +158,15 @@ class TestOpportunityScorer:
         c22_out = {"symbol": "A", "vix": 22.01}
         m22_out = scorer.score(c22_out, open_positions=["A"], session_pnl=0.0)
         assert m22_out == 1.00
+
+    def test_occ_option_symbol_diversification_detection(self):
+        """OCC option contract symbols (e.g. SPY250919P00480000) are normalized to underlying."""
+        scorer = OpportunityScorer()
+        c = {"symbol": "SPY", "vix": 25.0, "ivr": 20.0}
+        # SPY option is open, so diversification boost (+0.15) should NOT fire
+        mult = scorer.score(c, open_positions=["SPY250919P00480000"], session_pnl=0.0)
+        assert mult == 1.00
+
+        # AAPL option is open, so SPY is fresh and SHOULD get diversification boost
+        mult_fresh = scorer.score(c, open_positions=["AAPL240119C00150000"], session_pnl=0.0)
+        assert mult_fresh == 1.15

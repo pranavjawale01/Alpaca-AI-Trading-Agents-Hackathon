@@ -109,11 +109,13 @@ Signal Detected (EMA crossover, IVR threshold, etc.)
 │  Credibility-weighted formula:                             │
 │  net_score = Σ(w_i × confidence_i × vote_i) / Σ(w_i)       │
 │                                                            │
-│  Adaptive Conviction Tiers:                                │
-│  • STRONG   (≥0.55-0.80) → Size Multiplier: 1.00x          │
-│  • MODERATE (≥0.40-0.65) → Size Multiplier: 0.70x          │
-│  • PILOT    (≥0.25-0.50) → Size Multiplier: 0.40x          │
-│  • VETO     (< Threshold)→ Size Multiplier: 0.00x (Halt)   │
+│  Regime-Specific Conviction Tiers & Multipliers:           │
+│  • Risk-On  (VIX < 18):   Strong ≥ 0.55 | Mod ≥ 0.40 | Pilot ≥ 0.25 │
+│  • Neutral  (18 ≤ VIX < 28): Strong ≥ 0.65 | Mod ≥ 0.50 | Pilot ≥ 0.35 │
+│  • Risk-Off (VIX ≥ 28):  Strong ≥ 0.80 | Mod ≥ 0.65 | Pilot ≥ 0.50 │
+│  • VETO     (< Pilot):   Size Multiplier: 0.00x (Halt)     │
+│                                                            │
+│  Multiplier Sizing: Strong=1.00x, Moderate=0.70x, Pilot=0.40x │
 └────────────────────────────────────────────────────────────┘
          │
          ├── NOT VETO → Multiply with OpportunityScorer (1.0x-2.0x) → Sized Kelly Order

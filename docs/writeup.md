@@ -109,7 +109,7 @@ Every order is strictly vetted by `core/risk_manager.py` before hitting Alpaca's
 
 ## 7. Paper Trading Account
 
-- **Account ID**: `9e62f22b-a0cb-49c3-99d0-10a1fcd2c9a3`
+- **Account ID**: `[REDACTED_PAPER_ACCOUNT]` (Configured securely via `ALPACA_API_KEY`)
 - **Initial Balance**: $100,000.00 USD
 - **Environment**: Alpaca Paper Trading
 

@@ -110,17 +110,20 @@ class KellySizer:
         max_kelly = config.HYBRID.max_kelly_fraction
         effective_kelly = min(effective_kelly, max_kelly)
 
+        if size_multiplier <= 0.0:
+            return 0.0
+
         stats = self.journal.get_strategy_stats(strategy)
         n = stats.get("n_trades", 0)
 
         if n < _MIN_KELLY_TRADES:
             # Not enough history — use conservative defaults, still apply multipliers
             default_pct = _DEFAULT_PCT_BY_STRATEGY.get(strategy, _DEFAULT_PCT_BY_STRATEGY["default"])
-            adjusted_pct = default_pct * size_multiplier * greedy_multiplier
+            adjusted_pct = min(default_pct * size_multiplier * greedy_multiplier, max_kelly)
             size = equity * adjusted_pct
             log.info(
                 f"[KellySizer][{strategy}] Only {n} trades < {_MIN_KELLY_TRADES} minimum. "
-                f"Using default {default_pct*100:.1f}% × {size_multiplier:.2f} × {greedy_multiplier:.2f} → ${size:,.0f}"
+                f"Using default {default_pct*100:.1f}% × {size_multiplier:.2f} × {greedy_multiplier:.2f} (capped at {max_kelly*100:.1f}%) → ${size:,.0f}"
             )
             return min(size, hard_cap_dollars)
 
@@ -189,6 +192,8 @@ class KellySizer:
             size_multiplier=size_multiplier,
             greedy_multiplier=greedy_multiplier,
         )
+        if dollar_size <= 0:
+            return 0
         n = max(1, int(dollar_size / premium_per_contract))
         log.info(
             f"[KellySizer][{strategy}] ${dollar_size:,.0f} / ${premium_per_contract:,.0f} "

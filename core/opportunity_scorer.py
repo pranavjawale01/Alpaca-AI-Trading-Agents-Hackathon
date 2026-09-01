@@ -218,13 +218,21 @@ class OpportunityScorer:
         })
 
         # Criterion 5: Symbol not in open_positions list (+0.15)
-        open_set = {str(p).strip().upper() for p in open_positions if p}
-        if symbol:
-            not_in_open = symbol not in open_set
-            sym_detail = f"{symbol} not in {list(open_set) if open_set else '[]'}"
+        def _extract_underlying(pos_sym: Any) -> str:
+            raw = str(pos_sym).strip().upper()
+            for i, ch in enumerate(raw):
+                if ch.isdigit():
+                    return raw[:i]
+            return raw
+
+        open_set = {_extract_underlying(p) for p in open_positions if p}
+        target_sym = _extract_underlying(symbol) if symbol else ""
+        if target_sym:
+            not_in_open = target_sym not in open_set
+            sym_detail = f"{target_sym} not in {sorted(list(open_set)) if open_set else '[]'}"
         else:
             not_in_open = len(open_set) == 0
-            sym_detail = "no open positions" if not_in_open else f"open: {list(open_set)}"
+            sym_detail = "no open positions" if not_in_open else f"open: {sorted(list(open_set))}"
 
         criteria_results.append({
             "name": "Fresh Symbol (Diversification)",

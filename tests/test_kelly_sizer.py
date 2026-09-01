@@ -189,3 +189,9 @@ class TestContractCount:
         sizer = _make_sizer(n_trades=50, win_rate=0.65, avg_win=0.40, avg_loss=0.25)
         n = sizer.get_contract_count("theta", equity=100_000, premium_per_contract=0)
         assert n == 1
+
+    def test_contract_count_zero_size_multiplier_returns_zero(self):
+        """When size_multiplier is 0.0 (VETO), return 0 contracts."""
+        sizer = _make_sizer(n_trades=50, win_rate=0.65, avg_win=0.40, avg_loss=0.25)
+        n = sizer.get_contract_count("theta", equity=100_000, premium_per_contract=500, size_multiplier=0.0)
+        assert n == 0

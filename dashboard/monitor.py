@@ -585,7 +585,7 @@ if data_loaded:
             st.markdown(f"""
             <div class="metric-card" style="border-left: 4px solid #bc8cff;">
                 <div class="metric-label">Active Strategy Allocation</div>
-                <div class="metric-value" style="font-size: 20px;">{'All 4 Agents Active' if regime_str in ('RISK_ON', 'NEUTRAL') else 'Hedge + Theta Defensive'}</div>
+                <div class="metric-value" style="font-size: 20px;">{'All 4 Agents Active' if regime_str in ('RISK_ON', 'NEUTRAL') else 'Hedge Defense Only (Risk-Off)'}</div>
                 <div style="font-size: 12px; color: #8b949e;">Greedy Multipliers Enabled (up to 2.0x Kelly)</div>
             </div>
             """, unsafe_allow_html=True)

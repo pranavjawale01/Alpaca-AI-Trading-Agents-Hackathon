@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from dataclasses import dataclass, field
 from typing import Optional
@@ -32,6 +33,7 @@ from openai import OpenAI
 from rich.console import Console
 
 import config
+from core.model_discovery import discover_available_models
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -178,6 +180,7 @@ class LLMCouncil:
 
         self._client: Optional[OpenAI] = None
         self._available = False
+        self._discovered_models: list[str] = []
 
         if config.FEATHERLESS_API_KEY:
             try:
@@ -186,6 +189,18 @@ class LLMCouncil:
                     base_url=config.FEATHERLESS_BASE_URL,
                 )
                 self._available = True
+
+                # Dynamically discover all live warm/free models on the active provider
+                self._discovered_models = discover_available_models(
+                    client=self._client,
+                    base_url=config.FEATHERLESS_BASE_URL,
+                    api_key=config.FEATHERLESS_API_KEY,
+                )
+                # If models not explicitly overridden via environment, use top 3 discovered
+                if not (os.getenv("COUNCIL_MODEL_1") and os.getenv("COUNCIL_MODEL_2") and os.getenv("COUNCIL_MODEL_3")):
+                    if len(self._discovered_models) >= 3:
+                        self.models = self._discovered_models[:3]
+
                 console.print(
                     f"[bold green]LLMCouncil initialised (HYBRID MODE) | "
                     f"{len(self.models)} models | base_threshold={self.threshold:.2f}[/bold green]"
@@ -279,22 +294,48 @@ class LLMCouncil:
     def _query_model(
         self, model_id: str, context_str: str, strategy: str
     ) -> ModelVote:
-        """Query one LLM model and parse its JSON response."""
+        """Query one LLM model and parse its JSON response with automatic self-healing fallback."""
         prompt_template = _STRATEGY_PROMPTS.get(strategy, _STRATEGY_PROMPTS["general"])
         user_prompt = prompt_template.format(context=context_str)
 
-        response = self._client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,  # low temp for deterministic trading decisions
-            max_tokens=500,
-        )
+        attempt_models = [model_id]
+        if hasattr(self, "_discovered_models"):
+            for m in self._discovered_models:
+                if m not in attempt_models:
+                    attempt_models.append(m)
 
-        raw = response.choices[0].message.content or ""
-        return self._parse_vote(model_id, raw)
+        last_exc = None
+        for current_model in attempt_models:
+            try:
+                response = self._client.chat.completions.create(
+                    model=current_model,
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.1,  # low temp for deterministic trading decisions
+                    max_tokens=500,
+                )
+
+                raw = response.choices[0].message.content or ""
+                # If model was swapped due to auto-heal, update self.models
+                if current_model != model_id and model_id in self.models:
+                    idx = self.models.index(model_id)
+                    self.models[idx] = current_model
+                    console.print(
+                        f"[cyan][DYNAMIC MODEL HEALING] Swapped '{model_id}' -> '{current_model}'[/cyan]"
+                    )
+                return self._parse_vote(current_model, raw)
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc).lower()
+                # If unsupported model or 400/404, try next discovered model
+                if any(err_kw in err_str for err_kw in ["not supported", "400", "404", "model_not_found", "does not exist"]):
+                    continue
+                else:
+                    raise exc
+
+        raise last_exc or RuntimeError(f"All attempted models failed for {model_id}")
 
     def _parse_vote(self, model_id: str, raw: str) -> ModelVote:
         """Parse a model's JSON response into a ModelVote."""

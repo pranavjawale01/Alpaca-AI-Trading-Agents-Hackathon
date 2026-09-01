@@ -51,7 +51,7 @@ if os.getenv("NVIDIA_API_KEY") or FEATHERLESS_API_KEY.startswith("nvapi-"):
     _default_model = "meta/llama-3.1-8b-instruct"
 elif os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or FEATHERLESS_API_KEY.startswith("hf_"):
     _default_base_url = "https://router.huggingface.co/hf-inference/v1"
-    _default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    _default_model = "meta-llama/Llama-3.1-8B-Instruct"
 elif os.getenv("GROQ_API_KEY") or FEATHERLESS_API_KEY.startswith("gsk_"):
     _default_base_url = "https://api.groq.com/openai/v1"
     _default_model = "llama-3.1-8b-instant"
@@ -151,9 +151,9 @@ class CouncilConfig:
             ]
             if ("nvidia.com" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("nvapi-"))
             else [
-                os.getenv("COUNCIL_MODEL_1", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
-                os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.3"),
-                os.getenv("COUNCIL_MODEL_3", "Qwen/Qwen2.5-7B-Instruct"),
+                os.getenv("COUNCIL_MODEL_1", "meta-llama/Llama-3.1-8B-Instruct"),
+                os.getenv("COUNCIL_MODEL_2", "mistralai/Mistral-7B-Instruct-v0.2"),
+                os.getenv("COUNCIL_MODEL_3", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
             ]
             if ("huggingface.co" in FEATHERLESS_BASE_URL or FEATHERLESS_API_KEY.startswith("hf_"))
             else [

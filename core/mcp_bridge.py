@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from typing import Any, Optional
 
@@ -24,6 +25,7 @@ from openai import OpenAI
 from rich.console import Console
 
 import config
+from core.model_discovery import discover_available_models
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -104,6 +106,7 @@ class MCPBridge:
         # Featherless AI client (OpenAI-compatible)
         self.llm = None
         self._llm_available = False
+        self._discovered_models: list[str] = []
         if config.FEATHERLESS_API_KEY:
             try:
                 self.llm = OpenAI(
@@ -111,6 +114,16 @@ class MCPBridge:
                     base_url=config.FEATHERLESS_BASE_URL,
                 )
                 self._llm_available = True
+
+                # Discover available models
+                self._discovered_models = discover_available_models(
+                    client=self.llm,
+                    base_url=config.FEATHERLESS_BASE_URL,
+                    api_key=config.FEATHERLESS_API_KEY,
+                )
+                if not os.getenv("FEATHERLESS_MODEL") and self._discovered_models:
+                    self.model = self._discovered_models[0]
+
                 console.print(f"[green]OK MCPBridge initialised | model={self.model}[/green]")
             except Exception as e:
                 log.warning(f"MCPBridge: LLM init failed ({e}) — running without LLM")
@@ -158,39 +171,71 @@ class MCPBridge:
             log.debug("MCPBridge: LLM not available, returning empty response")
             return "[]"
 
-        try:
-            response = self.llm.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=MCP_TOOLS,
-                tool_choice="auto",
-                temperature=0.1,  # low temperature for trading decisions
-                max_tokens=1024,
-            )
+        attempt_models = [self.model]
+        if hasattr(self, "_discovered_models"):
+            for m in self._discovered_models:
+                if m not in attempt_models:
+                    attempt_models.append(m)
 
-            reply = response.choices[0]
+        reply = None
+        for current_model in attempt_models:
+            try:
+                response = self.llm.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    tools=MCP_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.1,  # low temperature for trading decisions
+                    max_tokens=1024,
+                )
 
-            # Handle tool calls
-            if reply.finish_reason == "tool_calls" and reply.message.tool_calls:
-                tool_results = []
-                for tool_call in reply.message.tool_calls:
-                    result = self._execute_tool(
-                        tool_call.function.name,
-                        json.loads(tool_call.function.arguments),
-                    )
-                    tool_results.append({
-                        "tool": tool_call.function.name,
-                        "result": result,
-                    })
+                if current_model != self.model:
+                    self.model = current_model
+                    console.print(f"[cyan][MCPBridge AUTO-HEAL] Swapped model -> '{current_model}'[/cyan]")
 
-                # Return formatted tool results
-                return json.dumps(tool_results, indent=2)
+                reply = response.choices[0]
+                break
+            except Exception as exc:
+                err_str = str(exc).lower()
+                if any(err_kw in err_str for err_kw in ["not supported", "400", "404", "model_not_found", "does not exist"]):
+                    continue
+                # If tool choice is unsupported by smaller models, retry without tools
+                if "tools" in err_str or "function" in err_str:
+                    try:
+                        response = self.llm.chat.completions.create(
+                            model=current_model,
+                            messages=messages,
+                            temperature=0.1,
+                            max_tokens=1024,
+                        )
+                        reply = response.choices[0]
+                        break
+                    except Exception:
+                        continue
+                log.warning(f"MCPBridge query failed on {current_model}: {exc}")
+                return "[]"
 
-            return reply.message.content or ""
+        if reply is None:
+            log.warning("MCPBridge: All models failed for query")
+            return "[]"
 
-        except Exception as e:
-            log.error(f"MCPBridge query failed: {e}")
-            return f"Error: {e}"
+        # Handle tool calls
+        if reply.finish_reason == "tool_calls" and reply.message.tool_calls:
+            tool_results = []
+            for tool_call in reply.message.tool_calls:
+                result = self._execute_tool(
+                    tool_call.function.name,
+                    json.loads(tool_call.function.arguments),
+                )
+                tool_results.append({
+                    "tool": tool_call.function.name,
+                    "result": result,
+                })
+
+            # Return formatted tool results
+            return json.dumps(tool_results, indent=2)
+
+        return reply.message.content or ""
 
     def _execute_tool(self, tool_name: str, args: dict) -> Any:
         """Execute an MCP tool call using the AlpacaClient."""

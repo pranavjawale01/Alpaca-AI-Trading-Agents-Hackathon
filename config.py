@@ -224,3 +224,43 @@ class ExecutionConfig:
 
 
 EXECUTION = ExecutionConfig()
+
+
+# ──────────────────────────────────────────────
+# Hybrid Greedy-Voting Council
+# ──────────────────────────────────────────────
+@dataclass
+class HybridConfig:
+    """
+    Configuration for the hybrid greedy-voting council upgrade.
+
+    Controls regime-adaptive consensus thresholds, pilot position sizing,
+    opportunity multiplier caps, and the Streamlit auto-pilot session interval.
+    """
+
+    # Enable/disable greedy opportunity scoring entirely
+    greedy_enabled: bool = os.getenv("GREEDY_ENABLED", "true").lower() == "true"
+
+    # Max Kelly scale-up from opportunity scorer
+    # At 2.0: quarter-Kelly (0.25) can scale to half-Kelly (0.50) on prime setups
+    max_greedy_multiplier: float = float(
+        os.getenv("MAX_GREEDY_MULTIPLIER", "2.0")
+    )
+
+    # Pilot position size multiplier (weak consensus trades)
+    pilot_size_multiplier: float = float(
+        os.getenv("PILOT_SIZE_MULTIPLIER", "0.40")
+    )
+
+    # Auto-pilot: minutes between trading sessions during market hours
+    session_interval_minutes: int = int(
+        os.getenv("SESSION_INTERVAL_MINUTES", "60")
+    )
+
+    # Max effective Kelly fraction after all multipliers
+    max_kelly_fraction: float = float(
+        os.getenv("MAX_KELLY_FRACTION", "0.50")
+    )
+
+
+HYBRID = HybridConfig()

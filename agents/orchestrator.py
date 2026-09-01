@@ -34,6 +34,8 @@ from core.llm_council import LLMCouncil
 from core.trade_journal import TradeJournal
 from core.kelly_sizer import KellySizer
 from core.smart_executor import SmartExecutor
+from core.opportunity_scorer import OpportunityScorer
+from core.model_credibility import ModelCredibilityTracker
 from agents.theta_collector import ThetaCollectorAgent
 from agents.iv_crush_agent import IVCrushAgent
 from agents.momo_breakout import MomoBreakoutAgent
@@ -86,28 +88,38 @@ class Orchestrator:
 
         # Smart executor: mid-price limit orders → avoids paying full spread
         self.executor = SmartExecutor(self.client)
+
+        # Opportunity scorer: greedy multiplier from stacking market criteria
+        self.opportunity_scorer = OpportunityScorer()
+
+        # Model credibility tracker: per-model accuracy weights
+        self.credibility_tracker = ModelCredibilityTracker()
+        self.council.set_credibility_tracker(self.credibility_tracker)
         # ────────────────────────────────────────────────────────────────
 
-        # Sub-agents (all pro systems + council injected)
+        # Sub-agents (all pro systems + council + opportunity scorer injected)
         self.theta = ThetaCollectorAgent(
             self.client, self.md, self.rm,
             council=self.council, kelly_sizer=self.kelly,
             smart_executor=self.executor, journal=self.journal,
+            opportunity_scorer=self.opportunity_scorer,
         )
         self.iv_crush = IVCrushAgent(
             self.client, self.md, self.rm,
             council=self.council, kelly_sizer=self.kelly,
             smart_executor=self.executor, journal=self.journal,
+            opportunity_scorer=self.opportunity_scorer,
         )
         self.momo = MomoBreakoutAgent(
             self.client, self.md, self.rm,
             council=self.council, kelly_sizer=self.kelly,
             smart_executor=self.executor, journal=self.journal,
+            opportunity_scorer=self.opportunity_scorer,
         )
         self.hedge = HedgeAgent(self.client, self.md, self.rm)  # hedge never filtered
 
         self.session_log: list[dict] = []
-        console.print("[bold green]All agents initialised successfully[/bold green]")
+        console.print("[bold green]All agents initialised successfully (HYBRID MODE)[/bold green]")
 
     # ─────────────────────────────────────────
     # Main Session Runner
@@ -132,6 +144,10 @@ class Orchestrator:
         regime = detect_regime(vix)
         console.print(f"[bold]Market Regime: [yellow]{regime.upper()}[/yellow] | VIX={vix:.1f}[/bold]")
 
+        # Push regime to LLM council for regime-adaptive consensus thresholds
+        if self.council is not None:
+            self.council.set_regime(regime)
+
         # Step 3: Run agents based on regime
         all_actions = []
 
@@ -142,8 +158,8 @@ class Orchestrator:
             # Theta runs in all non-extreme regimes
             all_actions += self.theta.run()
 
-        if regime == "risk_on":
-            # Momo only in full risk-on
+        if regime in ("risk_on", "neutral"):
+            # Momo active in risk-on and neutral (hybrid council filters false signals)
             all_actions += self.momo.run()
 
         if regime in ("risk_on", "neutral"):

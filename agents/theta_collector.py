@@ -60,8 +60,8 @@ class ThetaCollectorAgent:
     This is the most reliable P&L generator in the portfolio.
 
     Pro improvements:
-      1. LLM Council: vote gate for premium-selling signal quality
-      2. Kelly Criterion: size puts to win-rate-adjusted edge
+      1. LLM Council: hybrid tier-based vote gate (STRONG/MODERATE/PILOT)
+      2. Kelly Criterion: size puts to win-rate-adjusted edge with greedy multiplier
       3. SmartExecutor: sell at mid-price (receive more than bid)
       4. TradeJournal: persistent logging for Kelly feedback loop
     """
@@ -75,6 +75,7 @@ class ThetaCollectorAgent:
         kelly_sizer: Optional["KellySizer"] = None,
         smart_executor: Optional["SmartExecutor"] = None,
         journal: Optional["TradeJournal"] = None,
+        opportunity_scorer=None,
     ) -> None:
         self.client = client
         self.md = market_data
@@ -83,6 +84,7 @@ class ThetaCollectorAgent:
         self.kelly = kelly_sizer
         self.executor = smart_executor
         self.journal = journal
+        self.opportunity_scorer = opportunity_scorer
         self.symbols = config.UNIVERSE.theta_symbols
         self.active_positions: dict[str, dict] = {}
 
@@ -151,7 +153,8 @@ class ThetaCollectorAgent:
             log.info(f"[{symbol}] Skip: IVR={ivr:.1f} < {MIN_IVR_TO_ENTER}")
             return None
 
-        # ── Condition 3: LLM Council vote gate ────────────────────────
+        # ── Condition 3: Hybrid LLM Council vote gate ─────────────────
+        size_multiplier = 1.0  # default if council disabled
         if self.council is not None:
             ctx = SignalEnhancer.build_theta_context(
                 symbol=symbol,
@@ -163,18 +166,33 @@ class ThetaCollectorAgent:
             )
             consensus = self.council.vote(symbol, ctx, strategy="theta_put")
             console.print(consensus.summary())
-            if not consensus.agreed:
+            if consensus.conviction_tier == "veto":
                 console.print(
-                    f"[yellow][COUNCIL VETO] {symbol} CSP: "
-                    f"score={consensus.net_score:+.3f} (threshold={consensus.threshold}). "
-                    f"Dissenting: {consensus.dissenting_models or 'none (all hold)'}[/yellow]"
-                )
-                log.info(
-                    f"[{symbol}] Council vetoed theta entry: "
-                    f"score={consensus.net_score:+.3f} | "
-                    f"votes={[(v.model.split('/')[-1], v.action, v.confidence) for v in consensus.votes]}"
+                    f"[red][COUNCIL VETO] {symbol} CSP: "
+                    f"score={consensus.net_score:+.3f} | tier=VETO | "
+                    f"regime threshold not met[/red]"
                 )
                 return None
+            size_multiplier = consensus.size_multiplier
+            console.print(
+                f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} CSP: "
+                f"size_mult={size_multiplier:.2f}[/green]"
+            )
+        # ──────────────────────────────────────────────────────────────
+
+        # ── Opportunity Scorer — greedy multiplier ─────────────────────
+        greedy_multiplier = 1.0
+        if self.opportunity_scorer is not None:
+            opp_ctx = {
+                "ivr": ivr, "vix": vix,
+                "ema_signal": "bullish",  # theta assumes bullish/neutral
+                "strategy": "theta",
+            }
+            open_syms = list(self.active_positions.keys())
+            greedy_multiplier = self.opportunity_scorer.score(
+                opp_ctx, open_positions=open_syms,
+                session_pnl=self.rm.daily_pnl,
+            )
         # ──────────────────────────────────────────────────────────────
 
         # Find target expiration (~30-45 DTE)
@@ -211,7 +229,7 @@ class ThetaCollectorAgent:
             log.info(f"[{symbol}] Premium too low ({premium:.2f}), skipping")
             return None
 
-        # ── Kelly Criterion sizing ─────────────────────────────────────────
+        # ── Kelly Criterion sizing (hybrid multipliers) ────────────────────
         notional = target_strike * 100
         margin_requirement = notional * 0.20  # 20% margin for CSP
 
@@ -221,6 +239,8 @@ class ThetaCollectorAgent:
                 strategy="theta",
                 equity=equity,
                 premium_per_contract=margin_requirement,  # margin as the "spend"
+                size_multiplier=size_multiplier,
+                greedy_multiplier=greedy_multiplier,
             )
         else:
             n_contracts = max(1, int((equity * 0.04) / max(margin_requirement, 1000)))
@@ -253,6 +273,9 @@ class ThetaCollectorAgent:
             "qty": n_contracts,
             "premium_collected": premium * 100 * n_contracts,
             "order_id": result.get("id"),
+            "conviction_tier": consensus.conviction_tier if self.council else "bypass",
+            "size_multiplier": size_multiplier,
+            "greedy_multiplier": greedy_multiplier,
         }
 
         self.active_positions[symbol] = {
@@ -278,7 +301,9 @@ class ThetaCollectorAgent:
         console.print(
             f"[green][FILLED] ThetaCollector SOLD PUT: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} "
-            f"x{n_contracts} | premium=${premium*100*n_contracts:,.0f} | Kelly-sized[/green]"
+            f"x{n_contracts} | premium=${premium*100*n_contracts:,.0f} | "
+            f"tier={action['conviction_tier'].upper()} | "
+            f"greed={greedy_multiplier:.2f}[/green]"
         )
         return action
 

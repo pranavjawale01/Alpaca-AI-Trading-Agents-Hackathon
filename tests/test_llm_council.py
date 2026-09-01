@@ -147,18 +147,18 @@ class TestVotingMath:
     def test_tally_two_confident_buys_override_one_uncertain_sell(
         self, council_with_mock_client
     ):
-        """Two 0.90 buys vs one 0.55 sell → net > 0.60 → consensus BUY."""
+        """Two 0.90 buys vs one 0.55 sell → net ≈ 0.417 → pilot tier consensus BUY."""
         votes = [
             ModelVote("m1", "buy", 0.90, "Strong momentum"),
             ModelVote("m2", "buy", 0.90, "Confirmed breakout"),
             ModelVote("m3", "sell", 0.55, "Mild concern"),
         ]
         result = council_with_mock_client._tally_votes(votes, "momentum_call")
-        # net = (0.90 + 0.90 - 0.55) / 3 ≈ 0.417 — below 0.60
-        # Two 0.90 buys vs 0.55 sell: net = (0.9 + 0.9 - 0.55)/3 = 1.25/3 ≈ 0.417
-        # This is below threshold — which is correct: 2/3 agreement is not enough
-        # if the dissenter has meaningful confidence.
-        assert result.agreed is False
+        # net = (0.90 + 0.90 - 0.55) / 3 ≈ 0.417
+        # In neutral regime (pilot threshold: 0.35), this qualifies for PILOT tier
+        assert result.agreed is True
+        assert result.conviction_tier == "pilot"
+        assert result.action == "buy"
 
     def test_two_very_confident_buys_override_uncertain_sell(
         self, council_with_mock_client

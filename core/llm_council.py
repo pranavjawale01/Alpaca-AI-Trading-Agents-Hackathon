@@ -152,6 +152,10 @@ class LLMCouncil:
         "veto":     0.00,
     }
 
+    _credibility_tracker = None
+    _current_regime: str = "neutral"
+    _last_votes: list[ModelVote] = []
+
     def __init__(
         self,
         models: Optional[list[str]] = None,
@@ -164,13 +168,13 @@ class LLMCouncil:
         self.enabled = config.COUNCIL.enabled
 
         # Current VIX regime — updated by Orchestrator before each session
-        self._current_regime: str = "neutral"
+        self._current_regime = "neutral"
 
         # Credibility tracker — set externally by Orchestrator after init
         self._credibility_tracker = None
 
         # Track last gathered votes
-        self._last_votes: list[ModelVote] = []
+        self._last_votes = []
 
         self._client: Optional[OpenAI] = None
         self._available = False
@@ -361,9 +365,10 @@ class LLMCouncil:
 
         # Get credibility weights (default 1.0 for all models if no tracker)
         cred_weights = {}
-        if self._credibility_tracker is not None:
+        tracker = getattr(self, "_credibility_tracker", None)
+        if tracker is not None:
             try:
-                cred_weights = self._credibility_tracker.get_weights()
+                cred_weights = tracker.get_weights()
             except Exception as exc:
                 log.warning(f"Credibility tracker error: {exc}")
 
@@ -378,8 +383,9 @@ class LLMCouncil:
         net_score = total_weighted_score / total_weight if total_weight > 0 else 0.0
 
         # Get regime-adaptive thresholds
+        current_regime = getattr(self, "_current_regime", "neutral")
         regime_thresholds = self._REGIME_THRESHOLDS.get(
-            self._current_regime,
+            current_regime,
             self._REGIME_THRESHOLDS["neutral"]
         )
 

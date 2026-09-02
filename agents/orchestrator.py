@@ -67,11 +67,11 @@ class Orchestrator:
         orch.run_session()
     """
 
-    def __init__(self) -> None:
+    def __init__(self, client: Optional[AlpacaClient] = None) -> None:
         console.rule("[bold blue]Cache Me If You Can — Master Orchestrator[/bold blue]")
 
         # Core infrastructure
-        self.client = AlpacaClient()
+        self.client = client if client is not None else AlpacaClient()
         self.md = MarketData(self.client)
         self.rm = RiskManager()
         self.mcp = MCPBridge(self.client)
@@ -160,9 +160,10 @@ class Orchestrator:
             # Theta runs in all non-extreme regimes
             all_actions += self.theta.run()
 
-        if regime in ("risk_on", "neutral"):
-            # Momo active in risk-on and neutral (hybrid council filters false signals)
-            all_actions += self.momo.run()
+        # Momo active across all regimes:
+        # In risk_on & neutral: looks for bullish call breakouts
+        # In risk_off: looks for bearish breakdown put buys (short directional alpha)
+        all_actions += self.momo.run(regime=regime)
 
         if regime in ("risk_on", "neutral"):
             # IV crush needs earnings calendar — use LLM to help
@@ -222,13 +223,22 @@ class Orchestrator:
         """
         Estimate total portfolio delta from positions.
         Uses 1.0 delta for stock positions, 0.5 for options (rough estimate).
+        Correctly accounts for option type (Call vs Put) and direction (Long vs Short):
+          - Long Call  (qty > 0): +50 delta
+          - Short Call (qty < 0): -50 delta
+          - Long Put   (qty > 0): -50 delta
+          - Short Put  (qty < 0): +50 delta
         """
         total = 0.0
         for p in positions:
             qty = float(p.get("qty", 0))
-            if p.get("asset_class") == "us_option":
-                # Short puts: negative delta; long calls: positive delta
-                total += qty * 50  # rough: 0.50 delta * 100 shares per contract
+            sym = str(p.get("symbol", ""))
+            if p.get("asset_class") == "us_option" or any(c in sym for c in ("C0", "P0", "C1", "P1")):
+                # In OCC symbology, the 9th character from the end is 'C' or 'P' (before 8 digits of strike)
+                is_put = "P" in sym[-9:] if len(sym) >= 9 else ("P" in sym)
+                # Long put has negative delta; short put has positive delta
+                delta_multiplier = -50.0 if is_put else 50.0
+                total += qty * delta_multiplier
             else:
                 total += qty  # stocks: 1 delta each
         return total

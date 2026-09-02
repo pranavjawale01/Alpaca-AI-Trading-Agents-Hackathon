@@ -116,7 +116,11 @@ class MarketData:
         prev_slow = self._ema(closes[:-1], slow)
 
 
-        crossover = (prev_fast < prev_slow) and (ema_fast > ema_slow)
+        crossover_bullish = (prev_fast < prev_slow) and (ema_fast > ema_slow)
+        crossover_bearish = (prev_fast > prev_slow) and (ema_fast < ema_slow)
+        crossover = crossover_bullish or crossover_bearish
+        crossover_type = "bullish" if crossover_bullish else ("bearish" if crossover_bearish else "none")
+
         if ema_fast > ema_slow * 1.002:
             signal = "bullish"
         elif ema_fast < ema_slow * 0.998:
@@ -130,6 +134,9 @@ class MarketData:
             "ema_slow": ema_slow,
             "signal": signal,
             "crossover": crossover,
+            "crossover_type": crossover_type,
+            "crossover_bullish": crossover_bullish,
+            "crossover_bearish": crossover_bearish,
         }
 
     # ─────────────────────────────────────────

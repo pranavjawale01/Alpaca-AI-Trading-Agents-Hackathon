@@ -100,6 +100,13 @@ _STRATEGY_PROMPTS = {
         "Respond ONLY with valid JSON: "
         '{{"action": "buy", "confidence": 0.85, "reasoning": "one concise sentence"}}'
     ),
+    "momentum_put": (
+        "Evaluate this momentum breakdown setup for buying a short-dated OTM put option (bearish/short delta).\n"
+        "Market context:\n{context}\n\n"
+        "Should we enter a momentum put buy trade? "
+        "Respond ONLY with valid JSON: "
+        '{{"action": "buy", "confidence": 0.85, "reasoning": "one concise sentence"}}'
+    ),
     "theta_put": (
         "Evaluate this setup for selling a cash-secured put to collect theta premium.\n"
         "Market context:\n{context}\n\n"

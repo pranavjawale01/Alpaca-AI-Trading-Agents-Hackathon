@@ -1,0 +1,194 @@
+"""
+tests/test_two_sided_trading.py — Unit tests for two-sided trading capabilities:
+buying vs selling, long calls vs long puts (short delta), cash-secured puts,
+and portfolio delta Greek sign correctness.
+"""
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+from core.market_data import MarketData
+from core.signal_enhancer import SignalEnhancer
+from core.llm_council import LLMCouncil, _STRATEGY_PROMPTS
+from agents.orchestrator import Orchestrator
+from agents.momo_breakout import MomoBreakoutAgent
+from agents.theta_collector import ThetaCollectorAgent
+from core.risk_manager import RiskManager
+
+
+class TestEMACrossovers:
+    """Test MarketData EMA signal for both bullish and bearish crossovers."""
+
+    def test_bullish_crossover(self):
+        client = MagicMock()
+        # Fast EMA crosses ABOVE slow EMA on the last bar
+        prices = [100.0] * 30 + [99.0, 98.0, 97.0, 96.0, 105.0]
+        client.get_bars.return_value = [{"c": p, "v": 1000} for p in prices]
+
+        md = MarketData(client)
+        sig = md.get_ema_signal("TEST", fast=5, slow=10)
+
+        assert sig["crossover"] is True
+        assert sig["crossover_bullish"] is True
+        assert sig["crossover_bearish"] is False
+        assert sig["crossover_type"] == "bullish"
+        assert sig["signal"] == "bullish"
+
+    def test_bearish_crossover(self):
+        client = MagicMock()
+        # Fast EMA crosses BELOW slow EMA on the last bar
+        prices = [100.0] * 30 + [101.0, 102.0, 103.0, 104.0, 95.0]
+        client.get_bars.return_value = [{"c": p, "v": 1000} for p in prices]
+
+        md = MarketData(client)
+        sig = md.get_ema_signal("TEST", fast=5, slow=10)
+
+        assert sig["crossover"] is True
+        assert sig["crossover_bearish"] is True
+        assert sig["crossover_bullish"] is False
+        assert sig["crossover_type"] == "bearish"
+        assert sig["signal"] == "bearish"
+
+
+class TestSignalEnhancerTwoSided:
+    """Test SignalEnhancer produces correct context for both calls and puts."""
+
+    def test_bullish_context(self):
+        ema_sig = {"crossover": True, "crossover_type": "bullish", "signal": "bullish", "ema_fast": 105, "ema_slow": 100}
+        vol_surge = {"is_surging": True, "surge_ratio": 2.5}
+        ctx = SignalEnhancer.build_momo_context("AAPL", ema_sig, vol_surge, vix=18.0, price=105.0, direction="bullish")
+
+        assert ctx["trade_parameters"]["option_type"] == "call"
+        assert ctx["direction"] == "bullish"
+        assert "Call Buy" in ctx["strategy"]
+
+    def test_bearish_context(self):
+        ema_sig = {"crossover": True, "crossover_type": "bearish", "signal": "bearish", "ema_fast": 95, "ema_slow": 100}
+        vol_surge = {"is_surging": True, "surge_ratio": 2.5}
+        ctx = SignalEnhancer.build_momo_context("AAPL", ema_sig, vol_surge, vix=28.0, price=95.0, direction="bearish")
+
+        assert ctx["trade_parameters"]["option_type"] == "put"
+        assert ctx["direction"] == "bearish"
+        assert "Put Buy" in ctx["strategy"]
+        assert "Short Delta" in ctx["strategy"]
+
+
+class TestLLMCouncilPrompts:
+    """Verify LLM Council supports both momentum_call and momentum_put."""
+
+    def test_strategy_prompts_exist(self):
+        assert "momentum_call" in _STRATEGY_PROMPTS
+        assert "momentum_put" in _STRATEGY_PROMPTS
+        assert "theta_put" in _STRATEGY_PROMPTS
+        assert "iv_crush_straddle" in _STRATEGY_PROMPTS
+
+
+class TestPortfolioDeltaEstimation:
+    """Verify MasterOrchestrator._estimate_portfolio_delta accounts for long/short and call/put."""
+
+    @patch("agents.orchestrator.AlpacaClient")
+    def test_delta_signs(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.get_account.return_value = {"equity": 100000}
+        orchestrator = Orchestrator(client=mock_client)
+
+        positions = [
+            # Long Stock: +1 delta per share
+            {"symbol": "SPY", "qty": 10, "asset_class": "us_equity"},
+            # Short Stock: -1 delta per share
+            {"symbol": "QQQ", "qty": -5, "asset_class": "us_equity"},
+            # Long Call: positive delta (+50 per contract)
+            {"symbol": "AAPL260918C00200000", "qty": 1, "asset_class": "us_option"},
+            # Short Call: negative delta (-50 per contract)
+            {"symbol": "MSFT260918C00450000", "qty": -1, "asset_class": "us_option"},
+            # Long Put: negative delta (-50 per contract)
+            {"symbol": "NVDA260918P00120000", "qty": 1, "asset_class": "us_option"},
+            # Short Put: positive delta (+50 per contract)
+            {"symbol": "GOOG260918P00170000", "qty": -1, "asset_class": "us_option"},
+        ]
+
+        # Calculation:
+        # SPY: +10
+        # QQQ: -5
+        # AAPL Long Call: +1 * 50 = +50
+        # MSFT Short Call: -1 * 50 = -50
+        # NVDA Long Put: +1 * (-50) = -50
+        # GOOG Short Put: -1 * (-50) = +50
+        # Net: 10 - 5 + 50 - 50 - 50 + 50 = 5.0
+        delta = orchestrator._estimate_portfolio_delta(positions)
+        assert delta == 5.0
+
+
+class TestMomoTwoSidedExecution:
+    """Verify MomoBreakoutAgent executes both calls (long) and puts (short delta)."""
+
+    def test_buy_call_and_buy_put_delta_impact(self):
+        client = MagicMock()
+        client.get_account.return_value = {"equity": 100000}
+        md = MagicMock()
+        rm = MagicMock()
+
+        momo = MomoBreakoutAgent(client=client, market_data=md, risk_manager=rm)
+
+        contract_call = {"symbol": "AAPL260918C00200000", "expiration": "2026-09-18"}
+        action_call = momo._buy_option(
+            symbol="AAPL",
+            equity=100000,
+            contract=contract_call,
+            target_strike=200.0,
+            est_premium=3.0,
+            option_type="call",
+        )
+
+        assert action_call is not None
+        assert action_call["action"] == "buy_call"
+        assert action_call["direction"] == "bullish"
+        # Verify RiskManager approve_order called with positive delta for call
+        call_rm_args = rm.approve_order.call_args_list[-1][1]
+        assert call_rm_args["delta_impact"] > 0
+
+        contract_put = {"symbol": "AAPL260918P00180000", "expiration": "2026-09-18"}
+        action_put = momo._buy_option(
+            symbol="AAPL",
+            equity=100000,
+            contract=contract_put,
+            target_strike=180.0,
+            est_premium=3.0,
+            option_type="put",
+        )
+
+        assert action_put is not None
+        assert action_put["action"] == "buy_put"
+        assert action_put["direction"] == "bearish"
+        # Verify RiskManager approve_order called with negative delta for put
+        put_rm_args = rm.approve_order.call_args_list[-1][1]
+        assert put_rm_args["delta_impact"] < 0
+
+
+class TestThetaCollectorPositiveDelta:
+    """Verify ThetaCollector short put assigns positive delta."""
+
+    def test_short_put_positive_delta(self):
+        client = MagicMock()
+        client.get_account.return_value = {"equity": 100000}
+        md = MagicMock()
+        rm = MagicMock()
+
+        theta = ThetaCollectorAgent(client=client, market_data=md, risk_manager=rm)
+
+        # Mock entry scan conditions
+        md.get_price.return_value = 500.0
+        md.estimate_historical_vol.return_value = 0.25
+        rm.current_vix = 18.0
+        client.get_option_contracts.return_value = [
+            {"symbol": "SPY260918P00450000", "strike": 450.0, "expiration": "2026-09-18"}
+        ]
+        md.find_otm_strike.return_value = 450.0
+
+        signal = theta._evaluate_entry("SPY", 100000)
+        assert signal is not None
+        assert signal["action"] == "sell_put"
+
+        # Check that approve_order was called with positive delta
+        approve_call = rm.approve_order.call_args_list[-1][1]
+        assert approve_call["delta_impact"] > 0

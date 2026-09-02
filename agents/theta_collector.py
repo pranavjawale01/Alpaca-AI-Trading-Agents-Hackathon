@@ -264,11 +264,11 @@ class ThetaCollectorAgent:
 
         order_value = max(premium * 100 * n_contracts, margin_requirement * n_contracts * 0.10)
 
-        # Risk gate
+        # Risk gate (selling puts is a bullish/positive delta position)
         self.rm.approve_order(
             symbol=contract["symbol"],
             order_value=order_value,
-            delta_impact=-TARGET_DELTA * 100 * n_contracts,
+            delta_impact=TARGET_DELTA * 100 * n_contracts,
             is_option=True,
         )
 

@@ -32,30 +32,47 @@ class SignalEnhancer:
         vix: float,
         price: float,
         hist_vol: float | None = None,
+        direction: str = "bullish",
     ) -> dict[str, Any]:
         """
-        Context for MomoBreakout OTM call buy decisions.
+        Context for MomoBreakout OTM option buy decisions (Calls for bullish breakouts, Puts for bearish breakdowns).
 
         Args:
             symbol: Ticker symbol
-            ema_signal: Dict from MarketData.get_ema_signal() with keys:
-                        crossover (bool), signal (str), ema20, ema50
-            vol_surge: Dict from MarketData.get_volume_surge() with keys:
-                       is_surging (bool), surge_ratio (float)
+            ema_signal: Dict from MarketData.get_ema_signal()
+            vol_surge: Dict from MarketData.get_volume_surge()
             vix: Current CBOE VIX level
             price: Current underlying price
             hist_vol: Historical 30-day realised volatility (0.0–1.0), optional
+            direction: 'bullish' (call) or 'bearish' (put)
         """
+        is_bearish = direction.lower() == "bearish"
+        strategy_desc = (
+            "Momentum Breakdown — OTM Put Buy (Short Delta)"
+            if is_bearish
+            else "Momentum Breakout — OTM Call Buy (Long Delta)"
+        )
+        opt_type = "put" if is_bearish else "call"
+        key_risks = [
+            "False breakdown if volume surge is short-covering"
+            if is_bearish
+            else "False breakout if volume surge is sector-wide not stock-specific",
+            "Premium decay accelerates if momentum stalls",
+            "Elevated VIX inflates premium cost",
+        ]
+
         return {
-            "strategy": "Momentum Breakout — OTM Call Buy",
+            "strategy": strategy_desc,
             "symbol": symbol,
+            "direction": direction,
             "current_price": round(price, 2),
             "date": date.today().isoformat(),
             "technical_signals": {
                 "ema_crossover": ema_signal.get("crossover", False),
+                "ema_crossover_type": ema_signal.get("crossover_type", "unknown"),
                 "ema_signal": ema_signal.get("signal", "unknown"),
-                "ema_20": round(ema_signal.get("ema20", 0), 2),
-                "ema_50": round(ema_signal.get("ema50", 0), 2),
+                "ema_20": round(ema_signal.get("ema_fast", ema_signal.get("ema20", 0)), 2),
+                "ema_50": round(ema_signal.get("ema_slow", ema_signal.get("ema50", 0)), 2),
                 "volume_surging": vol_surge.get("is_surging", False),
                 "volume_surge_ratio": round(vol_surge.get("surge_ratio", 1.0), 2),
             },
@@ -65,18 +82,14 @@ class SignalEnhancer:
                 "historical_volatility_30d": round(hist_vol, 4) if hist_vol else None,
             },
             "trade_parameters": {
-                "option_type": "call",
+                "option_type": opt_type,
                 "moneyness": "5% OTM",
                 "target_dte": "30-45 days",
                 "max_premium_pct_equity": "1%",
                 "profit_target": "100% (2x premium)",
                 "stop_loss": "50% of premium",
             },
-            "key_risks": [
-                "False breakout if volume surge is sector-wide not stock-specific",
-                "Premium decay accelerates if momentum stalls",
-                "Elevated VIX inflates premium cost",
-            ],
+            "key_risks": key_risks,
         }
 
     @staticmethod

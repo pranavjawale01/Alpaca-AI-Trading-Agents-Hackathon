@@ -90,17 +90,19 @@ class MomoBreakoutAgent:
 
         console.print("[bold yellow]MomoBreakoutAgent initialised[/bold yellow]")
 
-    def run(self) -> list[dict]:
+    def run(self, regime: str = "neutral") -> list[dict]:
         actions = []
         actions += self._manage_existing_positions()
 
-        if len(self.active_positions) < MAX_POSITIONS and self.rm.current_vix < 25:
-            actions += self._scan_breakouts()
+        # In risk_on or neutral (VIX < 25), scans for bullish calls and bearish puts
+        # In risk_off (VIX < 35 kill switch), scans specifically for bearish breakdown puts (short alpha)
+        if len(self.active_positions) < MAX_POSITIONS and self.rm.current_vix < config.RISK.vix_kill_switch:
+            actions += self._scan_breakouts(regime=regime)
 
         return actions
 
-    def _scan_breakouts(self) -> list[dict]:
-        """Scan watchlist for EMA crossover + volume surge."""
+    def _scan_breakouts(self, regime: str = "neutral") -> list[dict]:
+        """Scan watchlist for EMA crossover + volume surge (Calls on bullish, Puts on bearish)."""
         actions = []
         account = self.client.get_account()
         equity = account["equity"]
@@ -116,12 +118,38 @@ class MomoBreakoutAgent:
                 ema_signal = self.md.get_ema_signal(symbol)
                 vol_surge = self.md.get_volume_surge(symbol)
 
-                # Both mathematical conditions must be true
+                # Both mathematical conditions must be true: crossover + volume surge
                 if not (ema_signal.get("crossover") and vol_surge.get("is_surging")):
                     continue
 
+                # Determine direction: Bullish (Call) or Bearish (Put)
+                is_bullish = (
+                    ema_signal.get("crossover_bullish")
+                    or (ema_signal.get("crossover") and ema_signal.get("signal") == "bullish")
+                )
+                is_bearish = (
+                    ema_signal.get("crossover_bearish")
+                    or (ema_signal.get("crossover") and ema_signal.get("signal") == "bearish")
+                )
+
+                if is_bullish:
+                    # Bullish calls only in calm/neutral markets (VIX < 25)
+                    if self.rm.current_vix >= 25:
+                        log.info(f"[{symbol}] Bullish breakout skipped: VIX={self.rm.current_vix:.1f} >= 25")
+                        continue
+                    direction = "bullish"
+                    option_type = "call"
+                    strategy_name = "momentum_call"
+                elif is_bearish:
+                    # Bearish breakdowns (puts) allowed across all regimes including risk_off
+                    direction = "bearish"
+                    option_type = "put"
+                    strategy_name = "momentum_put"
+                else:
+                    continue
+
                 console.print(
-                    f"[yellow][SIGNAL] Breakout detected: {symbol} | "
+                    f"[yellow][SIGNAL] Momentum {direction.upper()} detected: {symbol} | "
                     f"EMA={ema_signal.get('signal')} | surge={vol_surge.get('surge_ratio', 1.0):.1f}x[/yellow]"
                 )
 
@@ -132,17 +160,17 @@ class MomoBreakoutAgent:
                 expiry_min = (date.today() + timedelta(days=28)).isoformat()
                 expiry_max = (date.today() + timedelta(days=45)).isoformat()
 
-                calls = self.client.get_option_contracts(symbol, expiry_min, expiry_max, "call")
-                if not calls:
-                    log.info(f"[{symbol}] No call contracts found in DTE range")
+                contracts = self.client.get_option_contracts(symbol, expiry_min, expiry_max, option_type)
+                if not contracts:
+                    log.info(f"[{symbol}] No {option_type} contracts found in DTE range")
                     continue
 
                 target_strike = self.md.find_otm_strike(
-                    symbol, [c["strike"] for c in calls], "call", OTM_PCT
+                    symbol, [c["strike"] for c in contracts], option_type, OTM_PCT
                 )
-                contract = next((c for c in calls if c["strike"] == target_strike), None)
+                contract = next((c for c in contracts if c["strike"] == target_strike), None)
                 if not contract:
-                    log.info(f"[{symbol}] Target strike ${target_strike} not available")
+                    log.info(f"[{symbol}] Target {option_type} strike ${target_strike} not available")
                     continue
 
                 est_premium = price * 0.03
@@ -195,33 +223,35 @@ class MomoBreakoutAgent:
                         vix=self.rm.current_vix,
                         price=price,
                         hist_vol=hist_vol,
+                        direction=direction,
                     )
-                    consensus = self.council.vote(symbol, ctx, strategy="momentum_call")
+                    consensus = self.council.vote(symbol, ctx, strategy=strategy_name)
                     console.print(consensus.summary())
                     if consensus.conviction_tier == "veto":
                         console.print(
-                            f"[yellow][COUNCIL VETO] {symbol} momo: "
+                            f"[yellow][COUNCIL VETO] {symbol} momo {direction}: "
                             f"score={consensus.net_score:+.3f} | tier=VETO[/yellow]"
                         )
                         log.info(
-                            f"[{symbol}] Council vetoed momo entry: "
+                            f"[{symbol}] Council vetoed momo {direction} entry: "
                             f"score={consensus.net_score:+.3f} | tier=veto"
                         )
                         continue
                     size_multiplier = consensus.size_multiplier
                     console.print(
-                        f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} momo: "
+                        f"[green][COUNCIL {consensus.conviction_tier.upper()}] {symbol} momo {direction}: "
                         f"size_mult={size_multiplier:.2f}[/green]"
                     )
 
                 # ── 6. Final Kelly Sizing & Execution ─────────────────────────
                 votes_list = consensus.votes if (self.council and consensus) else []
-                action = self._buy_call(
+                action = self._buy_option(
                     symbol=symbol,
                     equity=equity,
                     contract=contract,
                     target_strike=target_strike,
                     est_premium=est_premium,
+                    option_type=option_type,
                     size_multiplier=size_multiplier,
                     greedy_multiplier=greedy_multiplier,
                     votes=votes_list,
@@ -236,18 +266,19 @@ class MomoBreakoutAgent:
 
         return actions
 
-    def _buy_call(
+    def _buy_option(
         self,
         symbol: str,
         equity: float,
         contract: dict,
         target_strike: float,
         est_premium: float,
+        option_type: str = "call",
         size_multiplier: float = 1.0,
         greedy_multiplier: float = 1.0,
         votes: Optional[list] = None,
     ) -> Optional[dict]:
-        """Buy OTM call using Kelly-sized position and mid-price limit order."""
+        """Buy OTM option (Call or Put) using Kelly-sized position and mid-price limit order."""
         # ── Kelly Criterion sizing ────────────────────────────────────
         if self.kelly is not None:
             n_contracts = self.kelly.get_contract_count(
@@ -266,10 +297,13 @@ class MomoBreakoutAgent:
 
         order_value = est_premium * 100 * n_contracts
 
+        # Long call has positive delta (~+0.30); Long put has negative delta (~-0.30)
+        delta_impact = (0.30 if option_type == "call" else -0.30) * 100 * n_contracts
+
         self.rm.approve_order(
             symbol=contract["symbol"],
             order_value=order_value,
-            delta_impact=0.30 * 100 * n_contracts,
+            delta_impact=delta_impact,
             is_option=True,
         )
 
@@ -285,9 +319,12 @@ class MomoBreakoutAgent:
             tier_by_mult = {1.0: "strong", 0.70: "moderate", 0.40: "pilot", 0.0: "veto"}
             conviction_tier = tier_by_mult.get(round(size_multiplier, 2), "strong")
 
+        action_name = f"buy_{option_type}"
         action = {
             "agent": "MomoBreakout",
-            "action": "buy_call",
+            "action": action_name,
+            "option_type": option_type,
+            "direction": "bullish" if option_type == "call" else "bearish",
             "symbol": symbol,
             "contract": contract["symbol"],
             "strike": target_strike,
@@ -324,12 +361,22 @@ class MomoBreakoutAgent:
         # ─────────────────────────────────────────────────────────
 
         console.print(
-            f"[green][FILLED] MomoBreakout BOUGHT CALL: {symbol} "
+            f"[green][FILLED] MomoBreakout BOUGHT {option_type.upper()}: {symbol} "
             f"${target_strike:.0f} exp={contract['expiration']} x{n_contracts} "
             f"| est premium=${est_premium:.2f} | tier={conviction_tier.upper()} "
             f"| greed={greedy_multiplier:.2f} | Kelly-sized[/green]"
         )
         return action
+
+    def _buy_call(self, *args, **kwargs) -> Optional[dict]:
+        """Backward compatibility alias for _buy_option with option_type='call'."""
+        kwargs["option_type"] = "call"
+        return self._buy_option(*args, **kwargs)
+
+    def _buy_put(self, *args, **kwargs) -> Optional[dict]:
+        """Backward compatibility alias for _buy_option with option_type='put'."""
+        kwargs["option_type"] = "put"
+        return self._buy_option(*args, **kwargs)
 
     def _manage_existing_positions(self) -> list[dict]:
         """

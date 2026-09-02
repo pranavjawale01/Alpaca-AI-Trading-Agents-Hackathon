@@ -69,28 +69,16 @@ st.set_page_config(
 )
 
 # ── Persistent Keep-Alive (Prevents Streamlit Cloud Hibernation) ──
-if hasattr(st, "html"):
-    st.html("""
-    <script>
-        setInterval(function() {
-            try {
-                fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
-                console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
-            } catch(e) {}
-        }, 270000);
-    </script>
-    """, unsafe_allow_html=True)
-else:
-    components.html("""
-    <script>
-        setInterval(function() {
-            try {
-                fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
-                console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
-            } catch(e) {}
-        }, 270000);
-    </script>
-    """, height=0)
+components.html("""
+<script>
+    setInterval(function() {
+        try {
+            fetch(window.location.href, { method: 'HEAD', mode: 'no-cors' });
+            console.log('[CacheMe] Keep-alive ping sent at ' + new Date().toISOString());
+        } catch(e) {}
+    }, 270000);
+</script>
+""", height=0)
 
 # ── Modern Minimalist CSS Theme ────────────────────────────────
 st.markdown("""

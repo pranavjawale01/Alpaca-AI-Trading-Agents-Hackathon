@@ -196,6 +196,8 @@ class IVCrushAgent:
         size_multiplier = 1.0  # default if council disabled
         consensus = None
         if self.council is not None:
+            all_pos = self.client.get_all_positions()
+            portfolio_state = SignalEnhancer.build_portfolio_context(self.rm, all_pos)
             days_to_earnings = 2  # conservative mid-estimate
             ctx = SignalEnhancer.build_iv_crush_context(
                 symbol=symbol,
@@ -205,6 +207,7 @@ class IVCrushAgent:
                 ivr=ivr,
                 atm_strike=atm_strike,
                 dte=10,
+                portfolio_state=portfolio_state,
             )
             consensus = self.council.vote(symbol, ctx, strategy="iv_crush_straddle")
             console.print(consensus.summary())
@@ -271,12 +274,13 @@ class IVCrushAgent:
             "size_multiplier": size_multiplier,
             "greedy_multiplier": greedy_multiplier,
         }
+        # ── Journal: log entry (straddle = two legs; log as one combined trade) ──
+        est_combined_premium = atm_strike * 0.05
+        action["entry_premium"] = est_combined_premium
         self.active_positions[symbol] = action
 
-        # ── Journal: log entry (straddle = two legs; log as one combined trade) ──
         if self.journal is not None:
             # Premium approximation: straddle premium ≈ 5% of underlying ATM price
-            est_combined_premium = atm_strike * 0.05
             trade_id = self.journal.log_entry(
                 agent="IVCrush",
                 strategy="iv_crush",
@@ -316,4 +320,49 @@ class IVCrushAgent:
                 del self.active_positions[symbol]
                 continue
 
+            call_pos = positions.get(call_sym)
+            put_pos = positions.get(put_sym)
+            call_market_value = float(call_pos["market_value"]) if call_pos else 0.0
+            put_market_value = float(put_pos["market_value"]) if put_pos else 0.0
+            
+            combined_current_value = abs(call_market_value) + abs(put_market_value)
+            n_contracts = meta["qty"]
+            atm_strike = meta["strike"]
+            entry_premium = meta.get("entry_premium", atm_strike * 0.05)
+            
+            # Profit target
+            if combined_current_value < entry_premium * 100 * n_contracts * (1 - PROFIT_TARGET_PCT):
+                self._close_straddle(symbol, call_sym, put_sym, meta, "profit_target")
+                actions.append({"agent": "IVCrush", "action": "closed_profit_target", "symbol": symbol})
+                continue
+                
+            # Stop loss
+            if combined_current_value > entry_premium * 100 * n_contracts * STOP_LOSS_MULTIPLIER:
+                self._close_straddle(symbol, call_sym, put_sym, meta, "stop_loss")
+                actions.append({"agent": "IVCrush", "action": "closed_stop_loss", "symbol": symbol})
+                continue
+
         return actions
+
+    def _close_straddle(self, symbol: str, call_sym: str, put_sym: str, meta: dict, reason: str) -> None:
+        """Close both legs of a straddle using SmartExecutor if available."""
+        try:
+            qty = meta["qty"]
+            if self.executor is not None:
+                if call_sym: self.executor.execute_option_order(call_sym, qty, "buy")
+                if put_sym: self.executor.execute_option_order(put_sym, qty, "buy")
+            else:
+                if call_sym: self.client.place_option_market_order(call_sym, qty, "buy")
+                if put_sym: self.client.place_option_market_order(put_sym, qty, "buy")
+                
+            if self.journal is not None and "journal_id" in meta:
+                is_profit = reason == "profit_target"
+                self.journal.log_exit(meta["journal_id"], 0.0, reason)
+                if self.council is not None and getattr(self.council, "_credibility_tracker", None):
+                    self.council._credibility_tracker.update_credibility(meta["journal_id"], is_profit)
+                    
+            del self.active_positions[symbol]
+            console.print(f"[blue][CLOSED] IVCrush closed {symbol} [{reason}][/blue]")
+        except Exception as e:
+            log.error(f"Failed to close {symbol}: {e}")
+

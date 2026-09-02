@@ -216,6 +216,15 @@ class MomoBreakoutAgent:
                 size_multiplier = 1.0
                 consensus = None
                 if self.council is not None:
+                    rsi = self.md.get_rsi(symbol) if hasattr(self.md, "get_rsi") else None
+                    macd = self.md.get_macd(symbol) if hasattr(self.md, "get_macd") else None
+                    bollinger = self.md.get_bollinger_bands(symbol) if hasattr(self.md, "get_bollinger_bands") else None
+                    sma200 = self.md.get_sma200(symbol) if hasattr(self.md, "get_sma200") else None
+                    atr = self.md.get_atr(symbol) if hasattr(self.md, "get_atr") else None
+                    momentum = self.md.get_price_momentum(symbol) if hasattr(self.md, "get_price_momentum") else None
+                    all_pos = self.client.get_all_positions()
+                    portfolio_state = SignalEnhancer.build_portfolio_context(self.rm, all_pos)
+
                     ctx = SignalEnhancer.build_momo_context(
                         symbol=symbol,
                         ema_signal=ema_signal,
@@ -224,6 +233,13 @@ class MomoBreakoutAgent:
                         price=price,
                         hist_vol=hist_vol,
                         direction=direction,
+                        rsi=rsi,
+                        macd=macd,
+                        bollinger=bollinger,
+                        sma200=sma200,
+                        atr=atr,
+                        momentum=momentum,
+                        portfolio_state=portfolio_state,
                     )
                     consensus = self.council.vote(symbol, ctx, strategy=strategy_name)
                     console.print(consensus.summary())
@@ -427,6 +443,13 @@ class MomoBreakoutAgent:
                 reason = "stop_loss"
                 color = "red"
                 msg = f"[STOP LOSS] {plpc*100:.0f}%"
+            
+            else:
+                remaining_dte = (date.fromisoformat(meta["expiration"]) - date.today()).days
+                if remaining_dte <= TIME_STOP_DTE:
+                    reason = "time_stop"
+                    color = "cyan"
+                    msg = f"[TIME STOP] {remaining_dte} DTE remaining"
 
             if reason:
                 # Close position using executor (mid-price) or market

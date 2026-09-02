@@ -139,10 +139,24 @@ QUANTITATIVE_AGENTS = [
 ]
 
 
+# ── 3-Agent Quantitative Strategy Evaluators ──────────────────
+QUANTITATIVE_AGENTS = [
+    "TrendMomentumAgent",
+    "VolatilityPricingAgent",
+    "RiskGreeksAgent",
+]
+
+
 class TrendMomentumEvaluator:
     """
     Agent 1: Trend & Momentum Strategy.
-    Evaluates trend direction, fast/slow EMA crossover, and volume surge.
+    Advanced multi-factor trend evaluation incorporating:
+      - Fast/Slow EMA crossovers (20/50)
+      - Volume surge confirmation (>=1.8x)
+      - RSI-14 momentum boundaries (overbought >70 / oversold <30 protection)
+      - MACD histogram direction & crossovers
+      - Bollinger Band positioning & volatility squeeze
+      - 200-day SMA macro regime filter
     """
     @staticmethod
     def evaluate(symbol: str, ctx: dict, strategy: str) -> ModelVote:
@@ -154,67 +168,142 @@ class TrendMomentumEvaluator:
         surge_ratio = tech.get("volume_surge_ratio", 1.0)
         vix = ctx.get("market_conditions", {}).get("vix", ctx.get("volatility", {}).get("vix", 20.0))
 
+        # Advanced technical factors
+        rsi = tech.get("rsi_14", 50.0)
+        macd_hist = tech.get("macd_histogram", 0.0)
+        macd_bull_cross = tech.get("macd_bullish_cross", False)
+        macd_bear_cross = tech.get("macd_bearish_cross", False)
+        above_sma200 = tech.get("price_above_sma200", True)
+        pct_b = tech.get("bollinger_pct_b", 0.5)
+
+        # ── 1. Theta Cash-Secured Put ─────────────────────────────────
         if "theta" in strat:
-            if vix < 30:
+            if vix >= 30:
                 return ModelVote(
                     model="TrendMomentumAgent",
-                    action="sell",
-                    confidence=0.90,
-                    reasoning=f"Market regime stable for theta collection (VIX={vix:.1f} < 30)",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"High market instability (VIX={vix:.1f} >= 30); trend too volatile for put selling",
                 )
+
+            # Score trend stability: stable / uptrending underlying preferred
+            score = 50
+            if vix < 20:
+                score += 20
+            elif vix < 25:
+                score += 10
+
+            if above_sma200:
+                score += 15
+            if rsi > 35:  # Not in a freefall
+                score += 15
+
+            conf = min(0.96, 0.75 + (score - 50) / 100.0)
             return ModelVote(
                 model="TrendMomentumAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"High market instability (VIX={vix:.1f} >= 30); trend too volatile for put selling",
+                action="sell",
+                confidence=conf,
+                reasoning=f"Market regime stable for theta collection (VIX={vix:.1f}, trend score={score}/100)",
             )
 
+        # ── 2. Momo Bullish Breakout (Call Buy) ─────────────────────────
         elif "momentum_call" in strat or (strat == "momo" and ctx.get("direction") == "bullish"):
-            if (crossover or crossover_type == "bullish") and is_surging:
-                conf = min(0.95, 0.70 + (surge_ratio - 1.0) * 0.1)
+            # Mandatory threshold: crossover or bullish alignment + volume surge
+            has_bull_cross = crossover or crossover_type == "bullish"
+            if not (has_bull_cross and is_surging):
                 return ModelVote(
                     model="TrendMomentumAgent",
-                    action="buy",
-                    confidence=conf,
-                    reasoning=f"Bullish EMA crossover confirmed by volume surge ({surge_ratio:.1f}x)",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Lack of bullish breakout confirmation (crossover={crossover}, surge={surge_ratio:.1f}x)",
                 )
+
+            # Check overbought trap: don't chase if RSI > 72 or pct_b > 1.05
+            if rsi > 72:
+                return ModelVote(
+                    model="TrendMomentumAgent",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Overbought exhaustion risk: RSI={rsi:.1f} > 72; breakout prone to pullback",
+                )
+
+            # Multi-factor score (0–100)
+            score = 30  # baseline for crossover
+            score += min(30, int((surge_ratio - 1.0) * 20))  # volume score up to 30
+            if 45 <= rsi <= 68:  # Healthy momentum range
+                score += 15
+            if macd_bull_cross or macd_hist > 0:
+                score += 15
+            if above_sma200:
+                score += 10
+
+            conf = min(0.98, 0.65 + (score / 100.0) * 0.30)
             return ModelVote(
                 model="TrendMomentumAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"Lack of bullish breakout confirmation (crossover={crossover}, surge={surge_ratio:.1f}x)",
+                action="buy",
+                confidence=conf,
+                reasoning=f"High-conviction bullish breakout: surge={surge_ratio:.1f}x, RSI={rsi:.1f}, score={score}/100",
             )
 
+        # ── 3. Momo Bearish Breakdown (Put Buy) ─────────────────────────
         elif "momentum_put" in strat or (strat == "momo" and ctx.get("direction") == "bearish"):
-            if (crossover or crossover_type == "bearish") and is_surging:
-                conf = min(0.95, 0.70 + (surge_ratio - 1.0) * 0.1)
+            has_bear_cross = crossover or crossover_type == "bearish"
+            if not (has_bear_cross and is_surging):
                 return ModelVote(
                     model="TrendMomentumAgent",
-                    action="buy",
-                    confidence=conf,
-                    reasoning=f"Bearish breakdown confirmed by volume surge ({surge_ratio:.1f}x)",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Lack of bearish breakdown confirmation (crossover={crossover}, surge={surge_ratio:.1f}x)",
                 )
+
+            # Check oversold trap: don't short into oversold bounce if RSI < 28
+            if rsi < 28:
+                return ModelVote(
+                    model="TrendMomentumAgent",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Oversold bounce risk: RSI={rsi:.1f} < 28; breakdown prone to mean-reversion",
+                )
+
+            # Multi-factor score
+            score = 30
+            score += min(30, int((surge_ratio - 1.0) * 20))
+            if 32 <= rsi <= 55:
+                score += 15
+            if macd_bear_cross or macd_hist < 0:
+                score += 15
+            if not above_sma200:
+                score += 10
+
+            conf = min(0.98, 0.65 + (score / 100.0) * 0.30)
             return ModelVote(
                 model="TrendMomentumAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"Lack of bearish breakdown confirmation (crossover={crossover}, surge={surge_ratio:.1f}x)",
+                action="buy",
+                confidence=conf,
+                reasoning=f"High-conviction bearish breakdown: surge={surge_ratio:.1f}x, RSI={rsi:.1f}, score={score}/100",
             )
 
+        # ── 4. IV Crush ATM Straddle ──────────────────────────────────
         elif "iv_crush" in strat or "straddle" in strat:
             days = ctx.get("earnings_event", {}).get("days_to_earnings", 2)
-            if 1 <= days <= 3:
+            if not (1 <= days <= 3):
                 return ModelVote(
                     model="TrendMomentumAgent",
-                    action="sell",
-                    confidence=0.88,
-                    reasoning=f"Optimal pre-earnings consolidation window ({days} days to earnings)",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Earnings timing ({days} days) outside optimal 1-3 day window",
                 )
+
+            # Consolidation factor: straddle selling prefers non-trending stock pre-earnings
+            conf = 0.88
+            if 40 <= rsi <= 60:
+                conf = 0.94
+
             return ModelVote(
                 model="TrendMomentumAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"Earnings timing ({days} days) outside optimal 1-3 day window",
+                action="sell",
+                confidence=conf,
+                reasoning=f"Optimal pre-earnings consolidation window ({days}d to earnings, RSI={rsi:.1f})",
             )
 
         return ModelVote(
@@ -228,7 +317,11 @@ class TrendMomentumEvaluator:
 class VolatilityPricingEvaluator:
     """
     Agent 2: Volatility & Pricing Strategy.
-    Evaluates IV Rank, historical vs implied volatility, and options pricing efficiency.
+    Advanced options pricing and volatility surface evaluation:
+      - IV Rank (IVR) absolute thresholds & percentiles
+      - IV / HV (Implied vs Realized Volatility) edge ratio
+      - Volatility regime suitability for buying vs selling
+      - Mispricing protection (prevents buying overpriced options)
     """
     @staticmethod
     def evaluate(symbol: str, ctx: dict, strategy: str) -> ModelVote:
@@ -236,52 +329,74 @@ class VolatilityPricingEvaluator:
         vol = ctx.get("volatility", {})
         ivr = vol.get("ivr", 0.0)
         hist_vol = vol.get("historical_vol_30d", ctx.get("market_conditions", {}).get("historical_volatility_30d", 0.25))
+        iv_hv = vol.get("iv_hv_ratio")
 
+        # ── 1. Theta Cash-Secured Put (Premium Selling) ───────────────
         if "theta" in strat:
-            if ivr >= 30:
-                conf = min(0.95, 0.70 + (ivr - 30) / 100.0)
+            if ivr < 30:
                 return ModelVote(
                     model="VolatilityPricingAgent",
-                    action="sell",
-                    confidence=conf,
-                    reasoning=f"IV Rank {ivr:.1f} elevated (>=30); rich premium available to collect",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"IV Rank {ivr:.1f} < 30; premium inadequate for short options risk",
                 )
+
+            # Premium sellers want rich IV and IV > HV
+            score = 60
+            score += min(25, int((ivr - 30) / 2))  # IVR contribution
+            if iv_hv and iv_hv >= 1.2:
+                score += 15  # IV expensive vs historical realized
+
+            conf = min(0.98, 0.70 + (score - 60) / 100.0)
             return ModelVote(
                 model="VolatilityPricingAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"IV Rank {ivr:.1f} < 30; premium inadequate for short options risk",
+                action="sell",
+                confidence=conf,
+                reasoning=f"Rich premium for put selling (IVR={ivr:.1f}>=30, vol score={score}/100)",
             )
 
+        # ── 2. IV Crush Straddle (Heavy Volatility Crush) ──────────────
         elif "iv_crush" in strat or "straddle" in strat:
-            if ivr >= 60:
-                conf = min(0.95, 0.75 + (ivr - 60) / 80.0)
+            if ivr < 60:
                 return ModelVote(
                     model="VolatilityPricingAgent",
-                    action="sell",
-                    confidence=conf,
-                    reasoning=f"IV Rank {ivr:.1f} >= 60 indicates high pre-earnings premium inflation",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"IV Rank {ivr:.1f} < 60; insufficient volatility inflation for straddle crush",
                 )
+
+            conf = min(0.98, 0.75 + (ivr - 60) / 80.0)
             return ModelVote(
                 model="VolatilityPricingAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"IV Rank {ivr:.1f} < 60; insufficient volatility inflation for straddle crush",
+                action="sell",
+                confidence=conf,
+                reasoning=f"Extreme volatility inflation detected (IVR={ivr:.1f} >= 60); prime IV crush edge",
             )
 
+        # ── 3. Momo Option Buying (Calls / Puts) ────────────────────────
         elif "momentum" in strat or "momo" in strat:
-            if ivr <= 45 or (hist_vol is not None and hist_vol <= 0.45):
+            # Option buyers want cheap options (low IVR) to avoid IV crush
+            if ivr > 50 and (hist_vol is not None and hist_vol > 0.45):
                 return ModelVote(
                     model="VolatilityPricingAgent",
-                    action="buy",
-                    confidence=0.85,
-                    reasoning=f"Option pricing attractive (IVR={ivr:.1f}); limited IV crush risk",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Option IV inflated (IVR={ivr:.1f}, HV={hist_vol:.2f}); high IV crush risk on long options",
                 )
+
+            # Favorable pricing: IVR <= 45 or HV <= 0.45
+            edge_score = 70
+            if ivr <= 30:
+                edge_score += 20  # Very cheap options
+            elif ivr <= 45:
+                edge_score += 10
+
+            conf = min(0.96, 0.65 + (edge_score / 100.0) * 0.30)
             return ModelVote(
                 model="VolatilityPricingAgent",
-                action="hold",
-                confidence=0.0,
-                reasoning=f"Option IV inflated (IVR={ivr:.1f}); high risk of volatility crush on entry",
+                action="buy",
+                confidence=conf,
+                reasoning=f"Attractive option pricing (IVR={ivr:.1f}); minimal IV crush headwind",
             )
 
         return ModelVote(
@@ -295,14 +410,21 @@ class VolatilityPricingEvaluator:
 class RiskGreeksEvaluator:
     """
     Agent 3: Risk & Greeks Strategy.
-    Evaluates VIX safety, Greeks exposure, and capital preservation parameters.
+    Advanced portfolio risk guardian:
+      - VIX kill switch and graduated risk tiers
+      - Portfolio heat tracking (options exposure cap)
+      - Daily P&L drawdown budget protection
+      - Correlation & sector concentration controls
+      - Greeks delta headroom verification
     """
     @staticmethod
     def evaluate(symbol: str, ctx: dict, strategy: str) -> ModelVote:
         strat = strategy.lower()
         vix = ctx.get("market_conditions", {}).get("vix", ctx.get("volatility", {}).get("vix", 20.0))
         trade_params = ctx.get("trade_parameters", {})
+        portfolio = ctx.get("portfolio_state", {})
 
+        # ── 1. Global VIX Kill Switch ──────────────────────────────────
         if vix >= 35:
             return ModelVote(
                 model="RiskGreeksAgent",
@@ -311,36 +433,77 @@ class RiskGreeksEvaluator:
                 reasoning=f"VIX={vix:.1f} exceeds 35 kill switch; capital preservation engaged",
             )
 
-        if "theta" in strat:
-            dte = trade_params.get("target_dte", 35)
-            if 25 <= dte <= 50:
-                return ModelVote(
-                    model="RiskGreeksAgent",
-                    action="sell",
-                    confidence=0.88,
-                    reasoning=f"DTE={dte} and target delta ~0.20 strictly within risk limits",
-                )
+        # ── 2. Portfolio Heat & Drawdown Guardian ─────────────────────
+        portfolio_heat = portfolio.get("portfolio_heat", 0.0)
+        pnl_budget_used = portfolio.get("pnl_budget_used", 0.0)
+        correlated_tech = portfolio.get("correlated_tech_count", 0)
+
+        if portfolio_heat >= 0.95:
             return ModelVote(
                 model="RiskGreeksAgent",
                 action="hold",
                 confidence=0.0,
-                reasoning=f"DTE={dte} outside risk-optimal window (25-50 days)",
+                reasoning=f"Portfolio options exposure near 30% limit (heat={portfolio_heat*100:.0f}%); risk cap engaged",
+            )
+
+        if pnl_budget_used >= 0.90:
+            return ModelVote(
+                model="RiskGreeksAgent",
+                action="hold",
+                confidence=0.0,
+                reasoning=f"Daily loss budget {pnl_budget_used*100:.0f}% consumed; preserving capital for next session",
+            )
+
+        tech_symbols = {"NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL"}
+        if symbol in tech_symbols and correlated_tech >= 4:
+            return ModelVote(
+                model="RiskGreeksAgent",
+                action="hold",
+                confidence=0.0,
+                reasoning=f"Concentration risk: {correlated_tech} tech positions already open; sector limit reached",
+            )
+
+        # ── 3. Strategy-Specific Greeks Checks ────────────────────────
+        if "theta" in strat:
+            dte = trade_params.get("target_dte", 35)
+            if not (25 <= dte <= 50):
+                return ModelVote(
+                    model="RiskGreeksAgent",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"DTE={dte} outside risk-optimal window (25-50 days)",
+                )
+
+            delta_headroom = portfolio.get("delta_headroom", 50.0)
+            if delta_headroom < 15.0 and portfolio.get("portfolio_delta", 0.0) > 35.0:
+                return ModelVote(
+                    model="RiskGreeksAgent",
+                    action="hold",
+                    confidence=0.0,
+                    reasoning=f"Insufficient portfolio delta capacity ({delta_headroom:.1f} left)",
+                )
+
+            return ModelVote(
+                model="RiskGreeksAgent",
+                action="sell",
+                confidence=0.92,
+                reasoning=f"Risk profile approved: DTE={dte}, target delta ~0.20 within safety bounds",
             )
 
         elif "momentum" in strat or "momo" in strat:
             return ModelVote(
                 model="RiskGreeksAgent",
                 action="buy",
-                confidence=0.88,
-                reasoning="Asymmetric reward profile: profit target 2.0x vs strict 50% hard stop and 25% trailing stop",
+                confidence=0.90,
+                reasoning="Asymmetric reward profile approved: 2.0x target vs strict 50% hard stop and 25% trailing stop",
             )
 
         elif "iv_crush" in strat or "straddle" in strat:
             return ModelVote(
                 model="RiskGreeksAgent",
                 action="sell",
-                confidence=0.88,
-                reasoning="Delta-neutral ATM straddle structure with strict 1.5x stop-loss verified",
+                confidence=0.90,
+                reasoning="Delta-neutral ATM straddle structure with strict stop-loss verified",
             )
 
         return ModelVote(

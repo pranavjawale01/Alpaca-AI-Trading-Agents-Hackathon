@@ -292,3 +292,188 @@ class TestThreeAgentQuantitativeCouncil:
         assert res.conviction_tier == "strong"
         assert res.size_multiplier == 1.00
         assert res.action == "buy"
+
+    def test_veto_overbought_rsi_trap(self):
+        council = LLMCouncil()
+        # Bullish crossover with volume surge, BUT RSI = 78.5 (overbought exhaustion trap)
+        ctx = {
+            "direction": "bullish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bullish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.5,
+                "rsi_14": 78.5,
+            },
+            "volatility": {"ivr": 22.0},
+            "market_conditions": {"vix": 16.0, "historical_volatility_30d": 0.22},
+            "trade_parameters": {"option_type": "call", "target_dte": 35},
+        }
+        res = council.vote("NVDA", ctx, strategy="momentum_call")
+
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert "TrendMomentumAgent" in res.dissenting_models
+
+    def test_veto_oversold_rsi_trap(self):
+        council = LLMCouncil()
+        # Bearish breakdown with volume surge, BUT RSI = 22.0 (oversold bounce risk)
+        ctx = {
+            "direction": "bearish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bearish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.5,
+                "rsi_14": 22.0,
+            },
+            "volatility": {"ivr": 25.0},
+            "market_conditions": {"vix": 22.0, "historical_volatility_30d": 0.28},
+            "trade_parameters": {"option_type": "put", "target_dte": 35},
+        }
+        res = council.vote("TSLA", ctx, strategy="momentum_put")
+
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert "TrendMomentumAgent" in res.dissenting_models
+
+    def test_veto_portfolio_heat_limit(self):
+        council = LLMCouncil()
+        # Perfect technical & volatility signals, but portfolio options exposure at 96%
+        ctx = {
+            "direction": "bullish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bullish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.2,
+                "rsi_14": 55.0,
+            },
+            "volatility": {"ivr": 25.0},
+            "market_conditions": {"vix": 18.0, "historical_volatility_30d": 0.25},
+            "trade_parameters": {"option_type": "call", "target_dte": 35},
+            "portfolio_state": {
+                "portfolio_heat": 0.96,  # > 0.95 cap
+                "pnl_budget_used": 0.20,
+                "correlated_tech_count": 1,
+            },
+        }
+        res = council.vote("AAPL", ctx, strategy="momentum_call")
+
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert "RiskGreeksAgent" in res.dissenting_models
+
+    def test_veto_correlated_tech_limit(self):
+        council = LLMCouncil()
+        # 4 tech positions already open -> 5th tech position rejected
+        ctx = {
+            "direction": "bullish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bullish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.2,
+                "rsi_14": 52.0,
+            },
+            "volatility": {"ivr": 25.0},
+            "market_conditions": {"vix": 17.0, "historical_volatility_30d": 0.24},
+            "trade_parameters": {"option_type": "call", "target_dte": 35},
+            "portfolio_state": {
+                "portfolio_heat": 0.50,
+                "pnl_budget_used": 0.10,
+                "correlated_tech_count": 4,  # Sector limit reached
+            },
+        }
+        res = council.vote("NVDA", ctx, strategy="momentum_call")
+
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert "RiskGreeksAgent" in res.dissenting_models
+
+
+class TestMarketDataTechnicalIndicators:
+    """Test the newly added quantitative indicators on MarketData."""
+
+    def test_rsi_calculation(self):
+        from unittest.mock import MagicMock
+        from core.market_data import MarketData
+
+        client = MagicMock()
+        # 25 upward bars -> RSI should be high (> 70)
+        bars = [{"c": 100.0 + i * 2.0} for i in range(25)]
+        client.get_bars.return_value = bars
+        md = MarketData(client)
+
+        res = md.get_rsi("NVDA", period=14)
+        assert res["symbol"] == "NVDA"
+        assert res["rsi"] > 70.0
+        assert res["zone"] == "overbought"
+
+    def test_macd_calculation(self):
+        from unittest.mock import MagicMock
+        from core.market_data import MarketData
+
+        client = MagicMock()
+        bars = [{"c": 100.0 + i * 1.5} for i in range(45)]
+        client.get_bars.return_value = bars
+        md = MarketData(client)
+
+        res = md.get_macd("NVDA")
+        assert res["symbol"] == "NVDA"
+        assert "macd_line" in res
+        assert "signal_line" in res
+        assert "histogram" in res
+
+    def test_bollinger_bands_calculation(self):
+        from unittest.mock import MagicMock
+        from core.market_data import MarketData
+
+        client = MagicMock()
+        bars = [{"c": 100.0 + (i % 3)} for i in range(35)]
+        client.get_bars.return_value = bars
+        client.get_latest_quote.return_value = {"mid": 101.0}
+        md = MarketData(client)
+
+        res = md.get_bollinger_bands("SPY")
+        assert res["symbol"] == "SPY"
+        assert res["upper"] > res["lower"]
+        assert "bandwidth" in res
+        assert "is_squeeze" in res
+
+    def test_sma200_calculation(self):
+        from unittest.mock import MagicMock
+        from core.market_data import MarketData
+
+        client = MagicMock()
+        bars = [{"c": 100.0 + i * 0.5} for i in range(215)]
+        client.get_bars.return_value = bars
+        md = MarketData(client)
+
+        res = md.get_sma200("SPY")
+        assert res["symbol"] == "SPY"
+        assert res["above_sma200"] is True
+        assert res["distance_pct"] > 0
+
+    def test_atr_and_momentum_calculation(self):
+        from unittest.mock import MagicMock
+        from core.market_data import MarketData
+
+        client = MagicMock()
+        bars = [{"o": 100.0, "h": 105.0, "l": 98.0, "c": 103.0 + i} for i in range(30)]
+        client.get_bars.return_value = bars
+        md = MarketData(client)
+
+        atr_res = md.get_atr("AAPL")
+        assert atr_res["symbol"] == "AAPL"
+        assert atr_res["atr"] > 0
+
+        momo_res = md.get_price_momentum("AAPL")
+        assert momo_res["symbol"] == "AAPL"
+        assert "roc_10" in momo_res
+        assert "roc_20" in momo_res
+        assert momo_res["momentum_strength"] in [
+            "strong_bullish", "bullish", "neutral", "bearish", "strong_bearish"
+        ]
+
+

@@ -33,6 +33,13 @@ class SignalEnhancer:
         price: float,
         hist_vol: float | None = None,
         direction: str = "bullish",
+        rsi: dict | None = None,
+        macd: dict | None = None,
+        bollinger: dict | None = None,
+        sma200: dict | None = None,
+        atr: dict | None = None,
+        momentum: dict | None = None,
+        portfolio_state: dict | None = None,
     ) -> dict[str, Any]:
         """
         Context for MomoBreakout OTM option buy decisions (Calls for bullish breakouts, Puts for bearish breakdowns).
@@ -45,6 +52,13 @@ class SignalEnhancer:
             price: Current underlying price
             hist_vol: Historical 30-day realised volatility (0.0–1.0), optional
             direction: 'bullish' (call) or 'bearish' (put)
+            rsi: Dict from MarketData.get_rsi(), optional
+            macd: Dict from MarketData.get_macd(), optional
+            bollinger: Dict from MarketData.get_bollinger_bands(), optional
+            sma200: Dict from MarketData.get_sma200(), optional
+            atr: Dict from MarketData.get_atr(), optional
+            momentum: Dict from MarketData.get_price_momentum(), optional
+            portfolio_state: Dict from SignalEnhancer.build_portfolio_context(), optional
         """
         is_bearish = direction.lower() == "bearish"
         strategy_desc = (
@@ -61,21 +75,46 @@ class SignalEnhancer:
             "Elevated VIX inflates premium cost",
         ]
 
-        return {
+        # ── Build enriched technical signals ──────────────────────────
+        tech_signals = {
+            "ema_crossover": ema_signal.get("crossover", False),
+            "ema_crossover_type": ema_signal.get("crossover_type", "unknown"),
+            "ema_signal": ema_signal.get("signal", "unknown"),
+            "ema_20": round(ema_signal.get("ema_fast", ema_signal.get("ema20", 0)), 2),
+            "ema_50": round(ema_signal.get("ema_slow", ema_signal.get("ema50", 0)), 2),
+            "volume_surging": vol_surge.get("is_surging", False),
+            "volume_surge_ratio": round(vol_surge.get("surge_ratio", 1.0), 2),
+        }
+
+        # Advanced indicators (available when MarketData provides them)
+        if rsi is not None:
+            tech_signals["rsi_14"] = round(rsi.get("rsi", 50.0), 1)
+            tech_signals["rsi_zone"] = rsi.get("zone", "neutral")
+        if macd is not None:
+            tech_signals["macd_histogram"] = round(macd.get("histogram", 0.0), 4)
+            tech_signals["macd_bullish_cross"] = macd.get("macd_bullish_cross", False)
+            tech_signals["macd_bearish_cross"] = macd.get("macd_bearish_cross", False)
+        if bollinger is not None:
+            tech_signals["bollinger_pct_b"] = round(bollinger.get("pct_b", 0.5), 3)
+            tech_signals["bollinger_squeeze"] = bollinger.get("is_squeeze", False)
+            tech_signals["bollinger_bandwidth"] = round(bollinger.get("bandwidth", 0.0), 2)
+        if sma200 is not None:
+            tech_signals["price_above_sma200"] = sma200.get("above_sma200", True)
+            tech_signals["sma200_distance_pct"] = round(sma200.get("distance_pct", 0.0), 2)
+        if atr is not None:
+            tech_signals["atr_14"] = round(atr.get("atr", 0.0), 2)
+            tech_signals["atr_pct"] = round(atr.get("atr_pct", 0.0), 2)
+        if momentum is not None:
+            tech_signals["momentum_roc_10"] = round(momentum.get("roc_10", 0.0), 2)
+            tech_signals["momentum_strength"] = momentum.get("momentum_strength", "neutral")
+
+        ctx = {
             "strategy": strategy_desc,
             "symbol": symbol,
             "direction": direction,
             "current_price": round(price, 2),
             "date": date.today().isoformat(),
-            "technical_signals": {
-                "ema_crossover": ema_signal.get("crossover", False),
-                "ema_crossover_type": ema_signal.get("crossover_type", "unknown"),
-                "ema_signal": ema_signal.get("signal", "unknown"),
-                "ema_20": round(ema_signal.get("ema_fast", ema_signal.get("ema20", 0)), 2),
-                "ema_50": round(ema_signal.get("ema_slow", ema_signal.get("ema50", 0)), 2),
-                "volume_surging": vol_surge.get("is_surging", False),
-                "volume_surge_ratio": round(vol_surge.get("surge_ratio", 1.0), 2),
-            },
+            "technical_signals": tech_signals,
             "market_conditions": {
                 "vix": round(vix, 1),
                 "vix_regime": _classify_vix(vix),
@@ -92,6 +131,11 @@ class SignalEnhancer:
             "key_risks": key_risks,
         }
 
+        if portfolio_state is not None:
+            ctx["portfolio_state"] = portfolio_state
+
+        return ctx
+
     @staticmethod
     def build_theta_context(
         symbol: str,
@@ -102,6 +146,7 @@ class SignalEnhancer:
         target_strike: float | None = None,
         dte: int = 35,
         premium_annualised_yield: float | None = None,
+        portfolio_state: dict | None = None,
     ) -> dict[str, Any]:
         """
         Context for ThetaCollector cash-secured put sell decisions.
@@ -115,8 +160,9 @@ class SignalEnhancer:
             target_strike: Proposed put strike (10% OTM), optional
             dte: Days to expiration for the target contract
             premium_annualised_yield: Annualised premium yield %, optional
+            portfolio_state: Dict from SignalEnhancer.build_portfolio_context(), optional
         """
-        return {
+        ctx = {
             "strategy": "Cash-Secured Put — Theta Collection",
             "symbol": symbol,
             "current_price": round(price, 2),
@@ -151,6 +197,11 @@ class SignalEnhancer:
             ],
         }
 
+        if portfolio_state is not None:
+            ctx["portfolio_state"] = portfolio_state
+
+        return ctx
+
     @staticmethod
     def build_iv_crush_context(
         symbol: str,
@@ -161,6 +212,7 @@ class SignalEnhancer:
         atm_strike: float | None = None,
         dte: int = 10,
         implied_move_pct: float | None = None,
+        portfolio_state: dict | None = None,
     ) -> dict[str, Any]:
         """
         Context for IVCrush ATM straddle sell ahead of earnings.
@@ -174,8 +226,9 @@ class SignalEnhancer:
             atm_strike: The ATM strike for the straddle, optional
             dte: Days to expiration of the options contracts
             implied_move_pct: Market-implied ±% move for earnings, optional
+            portfolio_state: Dict from SignalEnhancer.build_portfolio_context(), optional
         """
-        return {
+        ctx = {
             "strategy": "Earnings IV Crush — ATM Straddle Sell",
             "symbol": symbol,
             "current_price": round(price, 2),
@@ -210,6 +263,54 @@ class SignalEnhancer:
                 "IV does not collapse post-earnings (rare but possible)",
                 "Gap risk: earnings outside market hours make exit difficult",
             ],
+        }
+
+        if portfolio_state is not None:
+            ctx["portfolio_state"] = portfolio_state
+
+        return ctx
+
+    @staticmethod
+    def build_portfolio_context(
+        risk_manager: Any,
+        open_positions: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Build portfolio-level risk context for council evaluators.
+        """
+        equity = getattr(risk_manager, "equity", 100000.0)
+        daily_pnl = getattr(risk_manager, "daily_pnl", 0.0)
+        portfolio_delta = getattr(risk_manager, "portfolio_delta", 0.0)
+        options_exp = getattr(risk_manager, "total_options_exposure", 0.0)
+        vix = getattr(risk_manager, "current_vix", 18.0)
+
+        # Max allowed limits
+        max_exp = equity * 0.30
+        portfolio_heat = options_exp / max_exp if max_exp > 0 else 0.0
+        daily_loss_limit = equity * 0.02
+        pnl_budget_used = abs(daily_pnl) / daily_loss_limit if (daily_pnl < 0 and daily_loss_limit > 0) else 0.0
+
+        tech_symbols = {"NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL"}
+        pos_symbols: list[str] = []
+        if open_positions:
+            for p in open_positions:
+                sym = p.get("symbol", "")
+                if "/" in sym:
+                    sym = sym.split()[0]
+                pos_symbols.append(sym)
+        correlated_count = sum(1 for s in pos_symbols if any(tech in s for tech in tech_symbols))
+
+        return {
+            "equity": round(equity, 2),
+            "daily_pnl": round(daily_pnl, 2),
+            "portfolio_delta": round(portfolio_delta, 2),
+            "options_exposure": round(options_exp, 2),
+            "portfolio_heat": round(min(portfolio_heat, 1.0), 3),
+            "pnl_budget_used": round(min(pnl_budget_used, 1.0), 3),
+            "vix": round(vix, 1),
+            "open_positions_count": len(pos_symbols),
+            "correlated_tech_count": correlated_count,
+            "delta_headroom": round(50.0 - abs(portfolio_delta), 1),
         }
 
 

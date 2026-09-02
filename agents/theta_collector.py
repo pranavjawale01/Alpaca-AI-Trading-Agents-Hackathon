@@ -224,6 +224,8 @@ class ThetaCollectorAgent:
         size_multiplier = 1.0  # default if council disabled
         consensus = None
         if self.council is not None:
+            all_pos = self.client.get_all_positions()
+            portfolio_state = SignalEnhancer.build_portfolio_context(self.rm, all_pos)
             ctx = SignalEnhancer.build_theta_context(
                 symbol=symbol,
                 price=price,
@@ -231,6 +233,7 @@ class ThetaCollectorAgent:
                 vix=vix,
                 hist_vol=hist_vol,
                 dte=TARGET_DTE_MIN,
+                portfolio_state=portfolio_state,
             )
             consensus = self.council.vote(symbol, ctx, strategy="theta_put")
             console.print(consensus.summary())
@@ -357,6 +360,23 @@ class ThetaCollectorAgent:
                 self._close_position(symbol, contract_symbol, meta, "profit_target", profit_pct)
                 actions.append({"agent": "ThetaCollector", "action": "closed_profit_target",
                                  "symbol": symbol, "profit_pct": profit_pct})
+                continue
+
+            # Exit: Stop loss
+            if entry_premium > 0 and (current_value / entry_premium) > STOP_LOSS_MULTIPLIER:
+                self._close_position(symbol, contract_symbol, meta, "stop_loss", profit_pct)
+                actions.append({"agent": "ThetaCollector", "action": "closed_stop_loss",
+                                 "symbol": symbol, "profit_pct": profit_pct})
+                continue
+
+            # Exit: Time stop
+            expiration_date = date.fromisoformat(meta["expiration"])
+            dte = (expiration_date - date.today()).days
+            if dte <= TIME_STOP_DTE:
+                self._close_position(symbol, contract_symbol, meta, "time_stop", profit_pct)
+                actions.append({"agent": "ThetaCollector", "action": "closed_time_stop",
+                                 "symbol": symbol, "profit_pct": profit_pct})
+                continue
 
         return actions
 

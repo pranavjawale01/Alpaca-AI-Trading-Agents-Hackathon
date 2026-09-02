@@ -192,3 +192,103 @@ class TestThetaCollectorPositiveDelta:
         # Check that approve_order was called with positive delta
         approve_call = rm.approve_order.call_args_list[-1][1]
         assert approve_call["delta_impact"] > 0
+
+
+class TestThreeAgentQuantitativeCouncil:
+    """Verify 3-Agent Quantitative Strategy Council requiring unanimous approval."""
+
+    def test_unanimous_approval_theta_csp(self):
+        council = LLMCouncil()
+        ctx = {
+            "volatility": {"ivr": 45.0, "vix": 18.0, "historical_vol_30d": 0.22},
+            "market_conditions": {"vix": 18.0},
+            "trade_parameters": {"target_dte": 35, "target_delta": "~0.20"},
+        }
+        res = council.vote("SPY", ctx, strategy="theta_put")
+
+        assert res.agreed is True
+        assert res.conviction_tier == "strong"
+        assert res.size_multiplier == 1.00
+        assert res.action == "sell"
+        assert len(res.votes) == 3
+        assert len(res.dissenting_models) == 0
+
+    def test_veto_when_volatility_agent_dissents(self):
+        council = LLMCouncil()
+        # IVR = 15.0 (below 30 minimum threshold)
+        ctx = {
+            "volatility": {"ivr": 15.0, "vix": 18.0, "historical_vol_30d": 0.22},
+            "market_conditions": {"vix": 18.0},
+            "trade_parameters": {"target_dte": 35, "target_delta": "~0.20"},
+        }
+        res = council.vote("SPY", ctx, strategy="theta_put")
+
+        # Must be vetoed because VolatilityPricingAgent requires IVR >= 30
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert res.size_multiplier == 0.00
+        assert "VolatilityPricingAgent" in res.dissenting_models
+
+    def test_unanimous_approval_momo_call(self):
+        council = LLMCouncil()
+        ctx = {
+            "direction": "bullish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bullish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.2,
+            },
+            "volatility": {"ivr": 25.0},
+            "market_conditions": {"vix": 19.0, "historical_volatility_30d": 0.28},
+            "trade_parameters": {"option_type": "call", "target_dte": 35},
+        }
+        res = council.vote("NVDA", ctx, strategy="momentum_call")
+
+        assert res.agreed is True
+        assert res.conviction_tier == "strong"
+        assert res.size_multiplier == 1.00
+        assert res.action == "buy"
+
+    def test_veto_when_trend_agent_dissents_no_volume(self):
+        council = LLMCouncil()
+        # volume_surging = False
+        ctx = {
+            "direction": "bullish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bullish",
+                "volume_surging": False,
+                "volume_surge_ratio": 1.1,
+            },
+            "volatility": {"ivr": 25.0},
+            "market_conditions": {"vix": 19.0, "historical_volatility_30d": 0.28},
+            "trade_parameters": {"option_type": "call", "target_dte": 35},
+        }
+        res = council.vote("NVDA", ctx, strategy="momentum_call")
+
+        # TrendMomentumAgent dissents due to no volume confirmation
+        assert res.agreed is False
+        assert res.conviction_tier == "veto"
+        assert "TrendMomentumAgent" in res.dissenting_models
+
+    def test_unanimous_approval_momo_put_breakdown(self):
+        council = LLMCouncil()
+        ctx = {
+            "direction": "bearish",
+            "technical_signals": {
+                "ema_crossover": True,
+                "ema_crossover_type": "bearish",
+                "volume_surging": True,
+                "volume_surge_ratio": 2.4,
+            },
+            "volatility": {"ivr": 32.0},
+            "market_conditions": {"vix": 26.0, "historical_volatility_30d": 0.32},
+            "trade_parameters": {"option_type": "put", "target_dte": 35},
+        }
+        res = council.vote("TSLA", ctx, strategy="momentum_put")
+
+        assert res.agreed is True
+        assert res.conviction_tier == "strong"
+        assert res.size_multiplier == 1.00
+        assert res.action == "buy"

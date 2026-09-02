@@ -161,7 +161,7 @@ class MCPBridge:
         if context:
             messages.append({
                 "role": "user",
-                "content": f"Context:\n{json.dumps(context, indent=2)}\n\n{user_message}",
+                "content": f"Context:\n{json.dumps(context, indent=2, default=str)}\n\n{user_message}",
             })
         else:
             messages.append({"role": "user", "content": user_message})
@@ -233,7 +233,7 @@ class MCPBridge:
                 })
 
             # Return formatted tool results
-            return json.dumps(tool_results, indent=2)
+            return json.dumps(tool_results, indent=2, default=str)
 
         return reply.message.content or ""
 

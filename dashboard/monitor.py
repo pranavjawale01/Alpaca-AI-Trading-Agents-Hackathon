@@ -69,7 +69,7 @@ st.set_page_config(
 )
 
 # ── Persistent Keep-Alive (Prevents Streamlit Cloud Hibernation) ──
-components.html("""
+_keep_alive_js = """
 <script>
     setInterval(function() {
         try {
@@ -78,7 +78,11 @@ components.html("""
         } catch(e) {}
     }, 270000);
 </script>
-""", height=0)
+"""
+if hasattr(st, "iframe"):
+    st.iframe(_keep_alive_js, height=1)
+else:
+    components.html(_keep_alive_js, height=0)
 
 # ── Modern Minimalist CSS Theme ────────────────────────────────
 st.markdown("""

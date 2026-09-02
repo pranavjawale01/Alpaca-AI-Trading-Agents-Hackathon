@@ -335,7 +335,7 @@ class ThetaCollectorAgent:
     def _manage_existing_positions(self) -> list[dict]:
         """Check existing CSP positions for exit conditions."""
         actions = []
-        positions = {p["symbol"]: p for p in self.client.get_all_positions()}
+        positions = {p.get("symbol"): p for p in self.client.get_all_positions() if p.get("symbol")}
 
         for symbol, meta in list(self.active_positions.items()):
             contract_symbol = meta.get("contract")

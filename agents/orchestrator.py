@@ -273,11 +273,17 @@ class Orchestrator:
             if "[" in response:
                 start = response.index("[")
                 end = response.rindex("]") + 1
-                calendar = json.loads(response[start:end])
-                log.info(f"Earnings calendar from LLM: {calendar}")
-                self._cached_earnings = calendar
-                self._earnings_last_fetched = now
-                return calendar
+                parsed = json.loads(response[start:end])
+                if isinstance(parsed, list):
+                    calendar = [
+                        item for item in parsed
+                        if isinstance(item, dict) and "symbol" in item and "date" in item
+                    ]
+                    if calendar:
+                        log.info(f"Earnings calendar from LLM: {calendar}")
+                        self._cached_earnings = calendar
+                        self._earnings_last_fetched = now
+                        return calendar
         except Exception as e:
             log.warning(f"Earnings calendar fetch failed: {e}")
 

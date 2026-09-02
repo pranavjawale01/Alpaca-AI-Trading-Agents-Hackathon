@@ -408,7 +408,7 @@ class MomoBreakoutAgent:
         """
         actions = []
         trailing_pct = config.EXECUTION.trailing_stop_pct
-        positions = {p["symbol"]: p for p in self.client.get_all_positions()}
+        positions = {p.get("symbol"): p for p in self.client.get_all_positions() if p.get("symbol")}
 
         for symbol, meta in list(self.active_positions.items()):
             contract_sym = meta.get("contract")

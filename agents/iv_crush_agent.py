@@ -103,8 +103,14 @@ class IVCrushAgent:
         today = date.today()
 
         for event in calendar:
+            if not isinstance(event, dict) or "symbol" not in event or "date" not in event:
+                continue
             symbol = event["symbol"]
-            earnings_date = date.fromisoformat(event["date"])
+            try:
+                earnings_date = date.fromisoformat(str(event["date"]))
+            except Exception:
+                continue
+
             days_to_earnings = (earnings_date - today).days
 
             # Only trade if earnings are 1–3 days away
@@ -304,7 +310,7 @@ class IVCrushAgent:
     def _manage_existing_positions(self) -> list[dict]:
         """Close positions that hit profit target or stop loss."""
         actions = []
-        positions = {p["symbol"]: p for p in self.client.get_all_positions()}
+        positions = {p.get("symbol"): p for p in self.client.get_all_positions() if p.get("symbol")}
 
         for symbol, meta in list(self.active_positions.items()):
             call_sym = meta.get("call_contract")

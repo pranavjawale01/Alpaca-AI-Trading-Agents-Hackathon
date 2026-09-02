@@ -346,7 +346,7 @@ class Orchestrator:
         cs = summary.get("council_stats", {})
         if cs.get("enabled"):
             n_models = len(cs.get("models", []))
-            table.add_row("─" * 20, "─" * 20)
+            table.add_row("-" * 20, "-" * 20)
             table.add_row(
                 "Council Models",
                 f"[bold]{n_models} models[/bold] | threshold={cs.get('threshold', '?')}"
@@ -356,4 +356,7 @@ class Orchestrator:
         else:
             table.add_row("LLM Council", "[dim]disabled (rules-only)[/dim]")
 
-        console.print(table)
+        try:
+            console.print(table)
+        except Exception:
+            pass
